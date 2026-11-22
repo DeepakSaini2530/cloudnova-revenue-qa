@@ -217,12 +217,13 @@ SELECT
 """
 
 
-def build() -> dict:
+def build(raw_csv=None, db_path=None) -> dict:
     """Rebuild invoices, accounts and rejects from the raw CSV. Returns the data-quality summary."""
-    if not config.RAW_CSV.exists():
-        raise SystemExit(f"Raw CSV not found: {config.RAW_CSV} (set RAW_CSV)")
-    config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with duckdb.connect(str(config.DB_PATH)) as con:
+    raw_csv, db_path = raw_csv or config.RAW_CSV, db_path or config.DB_PATH
+    if not raw_csv.exists():
+        raise SystemExit(f"Raw CSV not found: {raw_csv} (set RAW_CSV)")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with duckdb.connect(str(db_path)) as con:
         con.execute("CREATE OR REPLACE TEMP TABLE maps (col VARCHAR, raw VARCHAR, canon VARCHAR)")
         con.executemany("INSERT INTO maps VALUES (?, ?, ?)",
                         [(col, raw, canon) for col, m in MAPS.items() for raw, canon in m.items()])
@@ -235,7 +236,7 @@ def build() -> dict:
         con.execute(
             "CREATE OR REPLACE TEMP TABLE raw AS SELECT row_number() OVER () + 1 AS raw_line, * "
             "FROM read_csv(?, all_varchar = true, header = true, parallel = false)",
-            [str(config.RAW_CSV)],
+            [str(raw_csv)],
         )
         con.execute(PARSE_SQL)
         clash = con.execute(

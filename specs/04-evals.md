@@ -15,6 +15,8 @@ Exit code is non-zero if any case fails that was not marked as an expected failu
 - Price reconciliation: for every invoice, `|amount_usd| = mrr_usd × (10 if annual else 1)` within $1.
   This is the check that justifies `FX_MODE=divide`.
 - `accounts` has one row per distinct `account_id` in `invoices`.
+- Reject path: the provided file produces no rejects, so a three-row file with one good row, one
+  unknown plan and one unparseable amount must yield 1 invoice and 2 rejects with those reasons.
 
 **Reference answers.** `evals/reference.py` recomputes the six stakeholder answers straight from the
 raw CSV using only the Python standard library. It shares no code with the pipeline. The eval compares

@@ -5,6 +5,7 @@
 """
 import json
 import sys
+import tempfile
 from decimal import Decimal
 from pathlib import Path
 
@@ -53,6 +54,19 @@ def offline(con: duckdb.DuckDBPyConnection, summary: dict, ref: dict) -> None:
     record("accounts: one row per account_id",
            one("SELECT count(*) FROM accounts") == one("SELECT count(DISTINCT account_id) FROM invoices")
            == ref["accounts"])
+
+    # The provided file produces no rejects, so prove the reject path with rows that must fail.
+    header, good = config.RAW_CSV.read_text(encoding="utf-8").splitlines()[:2]
+    with tempfile.TemporaryDirectory() as tmp:
+        bad = Path(tmp, "bad.csv")
+        bad.write_text("\n".join([header, good,
+                                  good.replace("INV-104380", "INV-BAD-1").replace("STARTER", "Platinum"),
+                                  good.replace("INV-104380", "INV-BAD-2").replace("52920.00", "52920.00x")]),
+                       encoding="utf-8")
+        s = pipeline.build(bad, Path(tmp, "bad.duckdb"))
+    record("bad rows go to rejects with a reason, good row survives",
+           s["invoices"] == 1 and sorted(r for r, _ in s["reject_reasons"]) == ["unknown plan", "unparseable amount"],
+           f"{s['invoices']} invoice, rejects {s['reject_reasons']}")
 
     print("\nReference answers (independent stdlib recompute vs SQL on the cleaned tables)")
 
