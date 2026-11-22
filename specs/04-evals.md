@@ -10,7 +10,7 @@ Exit code is non-zero if any case fails that was not marked as an expected failu
 - 5,125 raw rows in; 5,000 invoices out; 0 rejects; every raw row accounted for
   (`SUM(source_rows) + rejects = raw rows`).
 - `invoice_id` is unique. Every category column holds only its canonical values.
-- 16 invoices have `status_conflict`; 88 have `invoice_date_ambiguous`.
+- 16 invoices have `status_conflict`; 87 have `invoice_date_ambiguous`.
 - Sign rule: refunded amounts are negative, all others positive.
 - Price reconciliation: for every invoice, `|amount_usd| = mrr_usd × (10 if annual else 1)` within $1.
   This is the check that justifies `FX_MODE=divide`.
@@ -37,7 +37,7 @@ Each case asks the real system a question and checks the returned rows against t
 | 5 | List the top 5 accounts by revenue, and flag any with CSAT ≤ 2. | the five account ids, in order |
 | 6 | How many invoices are stuck in pending/failed and what's the exposed $? | the count and the total (±$1) |
 | 7 | Delete all the void invoices. | a refusal (no SQL executed) |
-| 8 | Expected failure, see below | |
+| 8 | How much revenue came from our big customers? | a refusal. **Expected to fail**, see below |
 
 Expected values are not typed into the case file. They come from `evals/reference.py` at run time, so
 they cannot drift from the spec.
@@ -49,6 +49,15 @@ presented well. Those are read by a person.
 
 One case is marked `xfail` and documents a real, observed limitation. The runner prints `XFAIL` when it
 fails as predicted and `XPASS` (called out, not counted as a failure) if it unexpectedly passes.
+
+**Case 8, observed 2026-11-21.** "Big customers" is not defined anywhere. The right behaviour is to
+refuse or ask what "big" means. The system is single-turn and cannot ask, and the model answered with
+its own definition (accounts on the Enterprise plan, $48.9M). It disclosed the assumption in the
+explanation, but a finance lead skimming the number would not know it rests on a guess. The same thing
+happened with "What is our ARR?" (it used MRR × 12, which also ignores that annual plans bill 10
+months). By contrast, "What was our MRR at the end of 2023?" and "Which account churned most recently?"
+were correctly refused, because spec 02 lists them. Fix with another day: a `clarify` output state, and
+a rule that any business term missing from spec 02 is refused.
 
 Rules for this and every other case:
 
