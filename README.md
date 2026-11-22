@@ -138,8 +138,8 @@ PASS 33  FAIL 0  XFAIL 1  XPASS 0
 - **The FX direction is my inference**, not confirmed by the customer. 10% swing on revenue.
 - **Account-level answers rest on an unreliable key** (see above).
 - **Undefined business terms are guessed, not refused** (the expected-fail case).
-- **The model is not deterministic.** The live cases passed on both full runs I made. Two runs is not
-  a pass rate; the same question can produce different SQL tomorrow.
+- **The model is not deterministic.** The live cases passed on all three full runs I made. Three runs
+  is not a pass rate; the same question can produce different SQL tomorrow.
 - **The live eval checker is lenient.** It passes when the expected value appears in the result rows.
   A result with the right number next to a wrong one would pass. Explanations and the CSAT flag in
   question 5 are not checked by code.
@@ -176,5 +176,5 @@ before the pipeline was committed.
 
 ## Time
 
-About 15 minutes of planning (profiling and decisions) and about 25 minutes of build, per the commit
-timestamps. I stopped there; everything not done is in the list above.
+Roughly 15 minutes of planning (profiling and decisions) and 15 minutes of build (commits run from
+22:26 to 22:41), inside the 60-minute box. I stopped there; everything not done is in the list above.

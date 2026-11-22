@@ -57,7 +57,10 @@ committed first, verification steps, and the actions it would ask permission for
 **Redirect:** it had proposed building inside an existing folder of mine. I moved it to a standalone
 folder so nothing unrelated could end up in a public repo. Plan updated, then approved.
 
-## 4. Build (about 25 minutes, see commit timestamps)
+## 4. Build (about 15 minutes, see commit timestamps)
+
+Steps 4 to 7 were written and run together and committed as separate logical commits once the evals
+were green, which is why those commits share a timestamp.
 
 1. Scaffold, repo-local git identity, raw data copied unchanged. *Commit.*
 2. Four specs, `CLAUDE.md`, `.claude/settings.json`. *Commit, before any code.*
