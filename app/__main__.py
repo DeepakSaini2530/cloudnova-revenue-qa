@@ -15,9 +15,7 @@ def fmt(v) -> str:
         return ""
     if isinstance(v, (float, Decimal)):
         return f"{v:,.2f}"
-    if isinstance(v, int) and not isinstance(v, bool):
-        return f"{v:,}"
-    return str(v)
+    return str(v)  # integers stay plain: a year must print as 2024, not 2,024
 
 
 def render(res: dict) -> None:

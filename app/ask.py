@@ -7,6 +7,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 import duckdb
@@ -15,6 +16,13 @@ from . import config
 
 MAX_ROWS = 50
 METRICS_SPEC = config.ROOT / "specs" / "02-metrics.md"
+ALLOWED_TABLES = {"invoices", "accounts"}  # not rejects, not contacts (personal data), not system tables
+SANDBOX = [
+    "SET enable_external_access = false",  # no file or network reads from SQL
+    "SET memory_limit = '1GB'",
+    "SET threads = 2",
+    "SET lock_configuration = true",  # must be last: nothing above can be undone afterwards
+]
 
 INSTRUCTIONS = """\
 You translate a finance stakeholder's question into one DuckDB SQL query over CloudNova's cleaned invoice data.
@@ -23,7 +31,7 @@ Reply with ONLY a JSON object. No prose around it and no code fences:
 {"sql": "<one DuckDB SELECT statement>" or null, "explanation": "<one or two plain-English sentences>"}
 
 Rules:
-- Use only the tables and columns in the schema below. One SELECT statement (CTEs are fine).
+- Use only the two tables and the columns in the schema below. One SELECT statement (CTEs are fine). No table functions, no other tables.
 - Apply the metric definitions below exactly. They override your own assumptions.
 - If the question cannot be answered from this data, or asks to change data, set "sql" to null and say why in "explanation".
 - Otherwise "explanation" says which definition was used and how the number was calculated, including any caveat the definitions ask for.
@@ -39,18 +47,64 @@ class AskError(Exception):
 def connect() -> duckdb.DuckDBPyConnection:
     """Read-only connection that cannot read files, reach the network or change its own settings."""
     con = duckdb.connect(str(config.DB_PATH), read_only=True)
-    con.execute("SET enable_external_access = false")
-    con.execute("SET lock_configuration = true")
+    # A second connection in the same process shares the first one's settings, already locked.
+    if not con.execute("SELECT current_setting('lock_configuration')").fetchone()[0]:
+        for setting in SANDBOX:
+            con.execute(setting)
     return con
 
 
-def run_sql(con: duckdb.DuckDBPyConnection, sql: str) -> tuple[list[str], list[tuple]]:
-    """Guard, then execute. Raises ValueError or duckdb.Error; never runs anything but one SELECT."""
-    statements = con.extract_statements(sql)
-    if len(statements) != 1 or statements[0].type != duckdb.StatementType.SELECT:
+def check_sql(con: duckdb.DuckDBPyConnection, sql: str) -> None:
+    """Raise ValueError unless sql is exactly one SELECT that reads only the allowed tables.
+
+    Works on DuckDB's own parse tree, not on the text: PRAGMA, SHOW and table functions such as
+    duckdb_settings() are classed as SELECT statements, so a statement-type check is not enough.
+    """
+    if len(con.extract_statements(sql)) != 1:
         raise ValueError("only a single SELECT statement is allowed")
-    cur = con.execute(statements[0])
-    return [d[0] for d in cur.description], cur.fetchmany(MAX_ROWS)
+    tree = json.loads(con.execute("SELECT json_serialize_sql(?)", [sql]).fetchone()[0])
+    if tree.get("error"):
+        raise ValueError("only a single SELECT statement is allowed")
+    tables, ctes, blocked = set(), set(), set()
+
+    def walk(node) -> None:
+        if isinstance(node, dict):
+            kind = node.get("type")
+            if kind == "BASE_TABLE":
+                parts = (node.get("catalog_name"), node.get("schema_name"), node.get("table_name"))
+                tables.add(".".join(p for p in parts if p).lower())
+            elif kind in ("TABLE_FUNCTION", "SHOW_REF"):
+                blocked.add(kind)
+            for entry in (node.get("cte_map") or {}).get("map", []):
+                ctes.add(entry["key"].lower())
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(tree)
+    real = {r[0].lower() for r in con.execute(
+        "SELECT table_name FROM duckdb_tables() UNION SELECT view_name FROM duckdb_views()").fetchall()}
+    # A CTE named like a real table could hide a read of that table in another scope.
+    offenders = sorted(blocked | (tables - ALLOWED_TABLES - ctes) | (ctes & real))
+    if offenders:
+        raise ValueError("the query may read only the invoices and accounts tables; not allowed: "
+                         + ", ".join(offenders))
+
+
+def run_sql(con: duckdb.DuckDBPyConnection, sql: str) -> tuple[list[str], list[tuple]]:
+    """Guard, then execute with a time limit. Raises ValueError or duckdb.Error."""
+    check_sql(con, sql)
+    timer = threading.Timer(config.QUERY_TIMEOUT, con.interrupt)
+    timer.start()
+    try:
+        cur = con.execute(sql)
+        return [d[0] for d in cur.description], cur.fetchmany(MAX_ROWS)
+    except duckdb.InterruptException:
+        raise ValueError(f"the query ran longer than {config.QUERY_TIMEOUT}s and was stopped") from None
+    finally:
+        timer.cancel()
 
 
 def system_prompt(con: duckdb.DuckDBPyConnection) -> str:
@@ -86,10 +140,13 @@ def llm(system: str, user: str) -> tuple[str, dict]:
     try:
         out = json.loads(proc.stdout)
     except json.JSONDecodeError:
-        raise AskError(f"model call failed (exit {proc.returncode}): {(proc.stderr or proc.stdout).strip()[:300]}") from None
-    if proc.returncode != 0 or out.get("is_error"):
-        raise AskError(f"model call failed: {str(out.get('result'))[:300]}")
-    return out["result"], {"seconds": out.get("duration_ms", 0) / 1000, "cost_usd": out.get("total_cost_usd", 0.0)}
+        out = None
+    if (proc.returncode != 0 or not isinstance(out, dict) or out.get("is_error")
+            or not isinstance(out.get("result"), str)):
+        detail = out.get("result") if isinstance(out, dict) else (proc.stderr or proc.stdout)
+        raise AskError(f"model call failed (exit {proc.returncode}): {str(detail).strip()[:300]}")
+    return out["result"], {"seconds": (out.get("duration_ms") or 0) / 1000,
+                           "cost_usd": out.get("total_cost_usd") or 0.0}
 
 
 def parse_reply(text: str) -> dict:
@@ -115,17 +172,19 @@ def answer(question: str) -> dict:
         for _attempt in (1, 2):
             try:
                 text, call = llm(system, user)
-                meta = {k: meta[k] + call[k] for k in meta}
-                reply = parse_reply(text)
-            except AskError as e:
+            except AskError as e:  # model unreachable or timed out: retrying will not help
                 return {"state": "failed", "error": str(e), **meta}
-            if reply["sql"] is None:
-                return {"state": "refused", "explanation": reply["explanation"], **meta}
+            meta = {k: meta[k] + call[k] for k in meta}
+            sql = None
             try:
-                columns, rows = run_sql(con, reply["sql"])
+                reply = parse_reply(text)
+                sql = reply["sql"]
+                if sql is None:
+                    return {"state": "refused", "explanation": reply["explanation"], **meta}
+                columns, rows = run_sql(con, sql)
                 return {"state": "answered", "columns": columns, "rows": rows, **reply, **meta}
-            except (ValueError, duckdb.Error) as e:
+            except (AskError, ValueError, duckdb.Error) as e:  # bad JSON, guard, database error, timeout
                 error = str(e)
-                user = (f"Question: {question}\n\nYour previous SQL:\n{reply['sql']}\n\n"
+                user = (f"Question: {question}\n\nYour previous reply:\n{text}\n\n"
                         f"It was rejected with:\n{error}\n\nReply with corrected JSON.")
-    return {"state": "failed", "error": f"generated SQL failed twice: {error}", "sql": reply["sql"], **meta}
+    return {"state": "failed", "error": f"two bad replies in a row: {error}", "sql": sql, **meta}
