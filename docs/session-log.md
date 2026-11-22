@@ -1,8 +1,9 @@
 # Session log (trimmed)
 
-One Claude Code session (desktop app, model Claude Fable 5.2), 2026-11-21. My prompts are quoted
-verbatim; the assistant's turns are summarized. Local paths and account details are removed. Nothing
-else is edited to look better than it was.
+Two Claude Code sessions (desktop app), both 2026-11-21: the build with Claude Fable 5.2 (sections 1
+to 5), then an independent review and polish pass with Claude Opus 5.5 (section 6). My prompts are
+quoted verbatim, trimmed where marked `[...]`; the assistant's turns are summarized. Local paths and
+account details are removed. Nothing else is edited to look better than it was.
 
 Standing instruction in my global Claude Code config, active for the whole session: *prefer the
 simplest solution that works; standard library and native features before new code or dependencies.*
@@ -115,13 +116,74 @@ Specs were changed and committed first, then the pipeline, the guard and the eva
 grew from 26 to 45 checks. Left as documented limits, by choice: the lenient live checker, the model
 timeout not killing the CLI's process tree on Windows, and no per-user access control.
 
-The hiring-manager finding stands: this log records what I asked for and what I decided, and says
-little about why.
+The hiring-manager finding stood at this point: this log recorded what I asked for and what I decided,
+and said little about why. Section 6 is where that changed.
+
+## 6. Independent review by a second model, then a polish pass
+
+A new Claude Code session with a different model (Claude Opus 5.5), started in plan mode, with no
+summary of how the repo was built beyond what is in the repo itself.
+
+> **Me:** Review the project developed by Fable for a usecase provided by OpsGuru for recruitment. I
+> choose one of the usecase from the 3 files shared by OpsGuru. [...]
+
+**Assistant:** Read the brief and both supporting files, then the whole repo. It checked the main
+claims itself rather than taking the README's word for them:
+
+- the files in `data/` are byte-identical to the ones OpsGuru sent;
+- dividing by the FX rate reconciles 5,000 of 5,000 invoices to list price, multiplying 3,476
+  (recomputed with the standard library, outside the pipeline);
+- duplicate copies differ only in `status`;
+- the database matches every number in the README;
+- ten more guard bypass attempts (`getenv`, `information_schema`, `SUMMARIZE`, FROM-first syntax, a
+  file read through a replacement scan, `PIVOT` over `contacts`, a recursive CTE) were all blocked or
+  stopped by the timeout;
+- commits carry no personal email and the CI runs are green.
+
+Verdict: no wrong answer. Main risk: rubric item 2, because my own reasoning was not visible. Small
+findings, none of which changes an answer:
+
+1. 6 of the 87 dates flagged as ambiguous have the same day and month, so swapping changes nothing.
+2. The guard refuses the legitimate schema-qualified name `main.invoices` (costs one retry).
+3. Every decimal printed to 2 places, so a churn rate returned as 0.2192 would show as 0.22.
+4. A genuine $0 invoice (100% discount) would be rejected with a misleading reason.
+5. `python -m app --build extra` is read as a question.
+6. `evals/reference.py` strips every non-digit from amounts, so it is only valid for this file.
+
+My first answer was **review only, no changes**. Then:
+
+> **Me:** I need to build and send this for my job application. This is the first round. [...]
+
+**Assistant:** Proposed sharpening what the rubric grades rather than adding features, closing
+weaknesses the README already admitted. Before writing anything about my reasoning it asked me why I
+made my three main calls, offering candidate reasons. I picked the ones that were mine and left the
+rest out: "no key to leak", "the data beats the wording", "keep it switchable, then ask" and "totals
+need SQL" were offered and not picked. My picks are the README's "My calls and why", unchanged in
+substance.
+
+Changed, spec first (see `git log`):
+
+- Every answer now prints "Check first" caveats (FX direction, MRR vs billed revenue, account
+  attributes) for the columns its SQL touched, taken from column comments, so a number cannot travel
+  without its warning even if the model leaves it out of the explanation.
+- `python -m evals --repeat 5` gives a real pass rate in place of "it passed on five runs".
+- Finding 3 fixed. Finding 1 written into the limitations.
+- README: a bottom line for the finance lead at the top, "My calls and why", and CI named as the one
+  bonus hardening touch.
+
+Declined, with reasons:
+
+- A `clarify` state to fix the expected-fail case. The brief asks for one real, observed failure;
+  fixing it would mean staging a new one.
+- A Dockerfile or `POST /ask`. The brief says pick one hardening touch.
+- Findings 2, 4, 5 and 6. They fail safe, and fixing them would change spec counts without changing
+  any answer.
 
 ## What I would point a reviewer at
 
 - The spec-first commit order is real: `git log --reverse`.
 - `specs/02-metrics.md` is both documentation and the model's runtime glossary.
+- The "Check first" caveats come from column comments (`app/pipeline.py`), not from the model.
 - The assistant was not allowed to fix a failing eval by editing the expected value (`CLAUDE.md`,
   rule 3). Expected values are computed by `evals/reference.py`, so there was nothing to edit anyway.
 - The one place I disagreed with the briefing (FX) is a config switch, with the evidence in spec 01.

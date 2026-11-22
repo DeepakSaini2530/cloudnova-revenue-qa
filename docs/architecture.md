@@ -30,7 +30,7 @@ flowchart TD
         LLM["Claude Code CLI, headless<br/>no tools, question on stdin"]
         GUARD{"Parse tree: one SELECT<br/>over invoices and<br/>accounts only?"}
         EXEC["Execute<br/>read-only, file access off,<br/>1 GB, 10s limit, max 50 rows"]
-        OUT["answered:<br/>SQL + rows + explanation"]
+        OUT["answered:<br/>SQL + rows + explanation<br/>+ 'Check first' caveats from the<br/>comments of the columns used"]
         REFUSED["refused:<br/>reason shown"]
         FAILED["failed:<br/>which step, no partial answer"]
         Q --> LLM
@@ -47,8 +47,8 @@ flowchart TD
 
     subgraph EVALS["Evals: python -m evals"]
         REF["evals/reference.py<br/>stdlib recompute from the raw CSV"]
-        OFF["Offline: invariants, synthetic reject paths,<br/>reference vs SQL, guard bypass attempts"]
-        NL["Live: 8 questions through Ask,<br/>rows checked against the reference"]
+        OFF["Offline: invariants, synthetic reject paths,<br/>reference vs SQL, guard bypass attempts, caveats"]
+        NL["Live: 8 questions through Ask, N runs each,<br/>rows checked against the reference"]
         REF --> OFF
         REF --> NL
     end
@@ -65,6 +65,9 @@ flowchart TD
   read `invoices` and `accounts`; it cannot write, reach the raw file, or read `contacts` and `rejects`.
 - **Business rules sit in the store, not in the prompt.** `amount_usd`, `recognized_usd` and `mrr_usd`
   are columns, so the model's job is to pick and aggregate columns, not to re-derive revenue rules.
+- **Warnings travel with the data.** A column or table comment can end in `Caveat: ...`. The guard
+  already knows which columns a query touched, so those caveats are printed under the answer whatever
+  the model wrote.
 - **One glossary.** `specs/02-metrics.md` is read by people, drove the build, and is sent to the model
   verbatim. There is no second copy to drift.
 - **Two independent implementations of the answers.** The SQL pipeline and `evals/reference.py` share

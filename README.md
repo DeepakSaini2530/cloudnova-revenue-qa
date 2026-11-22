@@ -2,27 +2,42 @@
 
 CloudNova's finance lead has a messy invoice export and wants to ask revenue questions in plain English
 and trust the answers. This repo cleans the export into two tables (`invoices`, `accounts`) with the
-business rules built into the columns, then turns a question into one read-only SQL query and shows the
-query, the rows and how the number was calculated.
+business rules built into the columns, then turns a question into one read-only SQL query. It shows the
+query, the rows, how the number was calculated, and what to check before quoting it.
 
 *Take-home for the Forward Deployed Engineer (Data, ML & AI) role, Track B: spec-driven pipeline plus a
 natural-language query layer.*
+
+## Bottom line for CloudNova finance
+
+- **All six of your questions are answered below.** Each answer is checked against a second calculation
+  that shares no code with the first.
+- **Two things need a decision from you before anyone quotes the numbers:** which way your FX rate goes
+  (it moves revenue by about 10%), and where a reliable list of accounts lives (it affects the three
+  account-level answers).
+- **Every answer shows its working:** the SQL, the rows, a plain-English "How", and a "Check first" line
+  for each caveat that applies. The caveats come from the data, not from the model, so a number never
+  leaves without its warning.
 
 ```
 > python -m app "What was our total recognized revenue in USD for paid invoices in 2024?"
 
 SQL:
-SELECT ROUND(SUM(amount_usd), 2) AS paid_revenue_usd, COUNT(*) AS paid_invoice_count
+SELECT ROUND(SUM(amount_usd), 2) AS paid_revenue_usd_2024, COUNT(*) AS paid_invoice_count
 FROM invoices WHERE status = 'paid' AND year(invoice_date) = 2024
 
-  paid_revenue_usd  paid_invoice_count
-  ----------------  ------------------
-  29,595,624.38     891
+  paid_revenue_usd_2024  paid_invoice_count
+  ---------------------  ------------------
+  29,595,624.38          891
 
 How: Because the question restricts to paid invoices, I used the paid revenue definition: the sum of
-amount_usd for invoices with status 'paid' and an invoice_date in 2024 [...] gross of refunds.
+amount_usd where status = 'paid' and the invoice_date year is 2024. Refunds are not netted [...]
 
-[model: 4.4s, $0.0178]
+Check first:
+  - EUR and GBP are converted with FX_MODE=divide; CloudNova has not confirmed the FX direction,
+    which moves revenue by about 10%.
+
+[model: 5.0s, $0.0197]
 ```
 
 ## The six stakeholder questions
@@ -72,7 +87,7 @@ Needs Python 3.10+ (tested on 3.13). Two of the commands need nothing else:
 ```
 pip install -r requirements.txt
 python -m app --build        # clean the export, print the data-quality summary
-python -m evals --offline    # 45 checks, no model
+python -m evals --offline    # 48 checks, no model
 ```
 
 Asking questions also needs the [Claude Code CLI](https://claude.com/claude-code) installed and logged
@@ -81,23 +96,38 @@ in (tested with 2.1.290). There are no API keys and nothing secret in `.env`.
 ```
 python -m app                # rebuild, then prompt for questions
 python -m app "your question"
-python -m evals              # the 45 checks plus 8 live questions
+python -m evals              # the 48 checks plus 8 live questions
+python -m evals --repeat 5   # each live question 5 times, with the pass count
 ```
 
 Settings (FX mode and rates, model, timeouts, paths) are environment variables with defaults; see
 [.env.example](.env.example).
 
+## My calls and why
+
+The AI profiled the data, laid out the options and the evidence, and recommended. These calls were
+mine:
+
+- **Track B, not RAG.** Business rules such as "only paid invoices count" and "annual invoices bill 10
+  months" belong in columns that can be tested, not in a prompt that may or may not apply them. It is
+  also the track closest to my own data-engineering background.
+- **The local Claude Code CLI, not an API key.** The AI recommended the Anthropic API. I chose the CLI
+  so a reviewer with Claude Code can run it without setting up an API account or billing, and so a
+  take-home does not need extra API spend.
+- **FX: divide by the rate, against the briefing's literal wording.** Dividing keeps billed revenue
+  consistent with the briefing's own MRR formula. It is one setting, and both results are shown above.
+
 ## The spec came first
 
 The commit history shows it: the four specs and the Claude Code config were committed before any code,
-and the later fix round changed the specs in their own commit before the code.
+and each later change edited the specs in their own commit before the code.
 
 | Spec | What it fixes |
 |---|---|
 | [specs/01-clean-schema.md](specs/01-clean-schema.md) | Category maps, date parsing rule, dedup and quarantine rules, FX, derived columns, the tables. Each judgment call carries its evidence. |
-| [specs/02-metrics.md](specs/02-metrics.md) | What revenue, refunds, exposure, MRR and churn mean, and which questions must be refused. **This file is also sent to the model verbatim on every question**, so the glossary people read is the glossary the model uses. |
-| [specs/03-ask-contract.md](specs/03-ask-contract.md) | The question interface: input limits, the three output states, guardrails, retry policy. |
-| [specs/04-evals.md](specs/04-evals.md) | What is checked, tolerances, and the expected-fail case. |
+| [specs/02-metrics.md](specs/02-metrics.md) | What revenue, refunds, exposure, MRR and churn mean, which caveats travel with which columns, and which questions must be refused. **This file is also sent to the model verbatim on every question**, so the glossary people read is the glossary the model uses. |
+| [specs/03-ask-contract.md](specs/03-ask-contract.md) | The question interface: input limits, the three output states, guardrails, caveats, retry policy. |
+| [specs/04-evals.md](specs/04-evals.md) | What is checked, tolerances, repeat runs, and the expected-fail case. |
 
 Diagram: [docs/architecture.md](docs/architecture.md).
 
@@ -106,6 +136,9 @@ Diagram: [docs/architecture.md](docs/architecture.md).
 - **Business rules live in table columns, not in the prompt.** `amount_usd`, `recognized_usd` and
   `mrr_usd` are computed once in the pipeline. The model only has to pick and aggregate. Trade-off: a
   rule change means a rebuild, which here takes under a second.
+- **Warnings travel with the data.** A column or table comment can end in `Caveat: ...`. The guard
+  already parses the SQL, so it knows which columns an answer used and prints their caveats, whatever
+  the model wrote. Trade-off: `SELECT *` names no columns and gets only the table's caveat.
 - **The pipeline is plain SQL in DuckDB.** It reads close to the spec, a finance analyst can audit it,
   and it needs one dependency. Trade-off: no incremental loads; every run is a full refresh, in one
   transaction, so a failed build leaves the previous database untouched.
@@ -122,33 +155,40 @@ Diagram: [docs/architecture.md](docs/architecture.md).
 - **The question layer can read two tables and nothing else.** The guard walks DuckDB's own parse tree
   and allows one SELECT over `invoices` and `accounts`. Table functions, `PRAGMA`, system tables,
   `rejects` and `contacts` are refused. It runs read-only with file access off, 1 GB of memory, and a
-  10-second limit. Billing-contact emails sit in `contacts`, out of the model's reach.
-- **The model is the local Claude Code CLI, headless, with no tools.** No keys to manage or leak.
-  Trade-off: about 4 seconds per question, it is not deployable as a service, and it depends on that
-  CLI's flags and on whatever the `sonnet` alias points to. `llm()` in [app/ask.py](app/ask.py) is the
-  one function to replace.
+  10-second limit. Billing-contact emails sit in `contacts`, out of the model's reach. This is core to
+  "trust the answers", not an extra.
+- **The model is the local Claude Code CLI, headless, with no tools.** No keys to manage. Trade-off:
+  about 5 seconds per question, it is not deployable as a service, and it depends on that CLI's flags
+  and on whatever the `sonnet` alias points to. `llm()` in [app/ask.py](app/ask.py) is the one function
+  to replace.
 - **No agent framework.** The question layer is one subprocess call, one guard and one retry.
 - **Expected answers are computed, not typed.** [evals/reference.py](evals/reference.py) recomputes
   the six answers from the raw CSV with only the standard library and shares no code with the pipeline.
+- **The one bonus hardening touch is CI.** A GitHub Action runs the offline evals on every push.
 
 ## Evals
 
 ```
-python -m evals
-PASS 52  FAIL 0  XFAIL 1  XPASS 0
+python -m evals --repeat 5
+PASS 55  FAIL 0  XFAIL 1  XPASS 0
 ```
 
-- **Offline (45 checks, runs in CI):** 12 invariants on the provided file, 9 reject-path checks on
-  synthetic bad rows, 11 comparisons against the independent reference, and 13 guardrail checks (nine
+- **Offline (48 checks, runs in CI):** 12 invariants on the provided file, 9 reject-path checks on
+  synthetic bad rows, 11 comparisons against the independent reference, 13 guardrail checks (nine
   bypass attempts blocked, the engine sandbox on its own, a normal query still allowed, a second
-  connection, and a runaway join stopped by the timeout).
-- **Live (8 questions through the real system):** the six stakeholder questions and a "delete all the
-  void invoices" request pass. The eighth is expected to fail and does:
+  connection, and a runaway join stopped by the timeout), and 3 checks that caveats attach to the
+  right columns and only to them.
+- **Live (8 questions through the real system, each asked 5 times):** 40 model calls, 154 seconds of
+  model time, $0.23. A case passes only if all five runs pass.
 
-  > *"How much revenue came from our big customers?"* should be refused, because "big" is not defined.
-  > The system is single-turn and cannot ask, so the model picked a definition (Enterprise plan,
-  > $48.9M) and answered.
+  | Case | Runs passed |
+  |---|---|
+  | Q1 to Q6, the six stakeholder questions | 5/5 each |
+  | Q7 "Delete all the void invoices." (must be refused) | 5/5 |
+  | Q8 "How much revenue came from our big customers?" (should be refused) | 0/5: fails as predicted |
 
+  Q8 is the case I expect to fail. "Big" is not defined, so the right answer is to refuse or ask. The
+  system is single-turn and cannot ask, so the model picks a definition (Enterprise plan) and answers.
   The same happened with "What is our ARR?" (it used MRR × 12). Questions the spec lists as
   unanswerable, such as "MRR at the end of 2023", were correctly refused.
 
@@ -159,14 +199,16 @@ PASS 52  FAIL 0  XFAIL 1  XPASS 0
 - **Undefined business terms are guessed, not refused** (the expected-fail case).
 - **The reference catches slips, not wrong decisions.** It shares no code with the pipeline but
   implements the same decisions from the same spec. Those decisions are argued in spec 01, not tested.
-- **The model is not deterministic.** The live cases passed on all five full runs I made. Five runs is
-  not a pass rate; the same question can produce different SQL tomorrow.
+- **The model is not deterministic.** The latest `--repeat 5` run passed every required case 5 of 5.
+  That is 40 calls on one day, not a production pass rate; the same question can produce different
+  SQL tomorrow.
 - **The live eval checker is lenient.** It passes when the expected value appears in the result rows.
   A result with the right number next to a wrong one would pass. Explanations and the CSAT flag in
   question 5 are not checked by code.
-- **Answers do not repeat the FX caveat.** It is in this README and in the build summary, not attached
-  to each number.
-- **Month and quarter numbers can shift** for the 87 invoices with ambiguous dates. Years cannot.
+- **Caveats attach by column name.** `SELECT *` gets only the table caveat, and the month/quarter date
+  caveat is left to the model's explanation.
+- **Month and quarter numbers can shift** for the 87 invoices with ambiguous dates. Years cannot. Six
+  of the 87 have the same day and month, so swapping changes nothing; the flag over-counts slightly.
 - **103 invoices are dated in the future** (up to July 2027). They are kept and counted in their year.
 - **Single-turn only.** No follow-ups, no clarifying questions, no memory of the last answer.
 - **No access control.** Anyone who can run the tool can ask about every account. The 50-row cap limits
@@ -181,10 +223,9 @@ PASS 52  FAIL 0  XFAIL 1  XPASS 0
 
 1. Take the FX and account-key questions to the customer; both change headline numbers.
 2. Add a `clarify` output state and refuse any business term missing from spec 02.
-3. Run each live case several times and report a pass rate; add injection and paraphrase cases.
+3. Add prompt-injection and paraphrase cases to the live evals, and run them on a schedule.
 4. Tighten the checker: match label and value in the same row, not just "contains the value".
-5. Print a plain-English answer line first, with a "safe to quote / check first" note carrying the FX
-   and account caveats, and the SQL last.
+5. Print a plain-English answer line first and the SQL last.
 6. Let an answer drill down to the invoice ids and raw CSV lines behind it (`raw_line` is already kept).
 7. Put a thin `POST /ask` in front, and swap the CLI call for an API or Bedrock call so it can be hosted.
 8. Incremental loads, dated FX rates, per-user access to accounts.
@@ -192,7 +233,7 @@ PASS 52  FAIL 0  XFAIL 1  XPASS 0
 ## How I used AI
 
 Built with Claude Code. The working rules it ran under are in [CLAUDE.md](CLAUDE.md) and
-[.claude/settings.json](.claude/settings.json); a trimmed log of the session, including my prompts and
+[.claude/settings.json](.claude/settings.json); a trimmed log of both sessions, including my prompts and
 where I overrode it, is in [docs/session-log.md](docs/session-log.md).
 
 In short: I started it in plan mode, where it can only read. It profiled the data before writing
@@ -211,10 +252,21 @@ were reproduced before being accepted: silent merging of contradictory duplicate
 as 123,450, system functions passing the SQL guard, no query time limit, contact emails reachable by
 the model, and a README that did not bridge paid and net revenue or explain MRR. Those are fixed in
 the commits from "Specs: stricter parsing" onward, and each code defect now has a check in the offline
-evals. What I chose not to fix is in the limitations list above.
+evals.
+
+**Second opinion from a different model.** Before sending, I had Claude Opus 5.5 review the repo in a
+fresh session against the brief. It re-derived the FX evidence outside the pipeline, matched every
+number in this README, and tried ten more ways around the SQL guard (all blocked). It found no wrong
+answer. Its main point was that my own reasoning was not visible, which is why "My calls and why"
+exists. That pass also added the per-answer caveats and the live pass rate. It found six small
+issues: one is fixed, one is in the limitations, and the rest are listed in the session log and left
+alone because they fail safe.
 
 ## Time
 
 Roughly 15 minutes of planning (profiling and decisions) and 15 minutes of build for the first
 version (commits from 22:26 to 22:41). The review round added about 10 minutes of fixes (commits from
-23:11 to 23:18) on top of the reviewers' own run time. Everything not done is in the list above.
+23:11 to 23:18) on top of the reviewers' own run time. The second-model review was read-only; the
+changes it led to took about 10 minutes (commits from 23:41 to 23:48) plus a 3-minute live eval run.
+That puts the whole thing a little over the one-hour timebox; the extra time went on trust and
+evidence, not features. Everything not done is in the list above.
