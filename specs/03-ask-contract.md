@@ -28,13 +28,19 @@ to go stale.
 5. **Retry once.** If the reply is not the expected JSON, the SQL fails the guard, or the database
    errors or times out, the error is sent back to the model for one corrected attempt. A second failure
    is reported as a failure.
-6. **Show** the generated SQL, the result table, the explanation, and the model's latency and cost.
+6. **Show** the generated SQL, the result table, the explanation, the caveats, and the model's latency
+   and cost.
+
+**Caveats** ("Check first") come from the data, not from the model. The guard's parse tree already
+names every table and column the SQL references. For each one that has a comment ending in
+`Caveat: <text>` (spec 01), that text is printed under the answer. `ask.py` holds no caveat text.
+`SELECT *` names no columns, so it gets the table caveats only.
 
 ## Output states
 
 | State | Meaning | Exit code (one-shot) |
 |---|---|---|
-| `answered` | SQL ran; SQL + rows + explanation shown | 0 |
+| `answered` | SQL ran; SQL + rows + explanation + caveats shown | 0 |
 | `refused` | Model returned `sql: null`; the reason is shown | 0 |
 | `failed` | Invalid input, model unavailable or timed out, database busy, or two bad replies in a row | 1 |
 

@@ -104,6 +104,10 @@ consistent with the MRR formula. `FX_MODE=multiply` gives the literal reading. T
 
 ## Tables
 
+Column and table comments carry the meaning to the model with the schema. A comment may end in
+`Caveat: <text>`; the question layer prints that text under any answer that uses the column or table
+(spec 03). The caveats are the ones listed in spec 02.
+
 ### `invoices` (one row per invoice)
 
 `invoice_id` (unique), `account_id`, `account_name`, `region`, `industry`, `plan`,

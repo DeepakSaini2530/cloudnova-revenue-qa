@@ -61,6 +61,14 @@ the local-currency `amount` column for totals.
   (`invoice_date_ambiguous`), which can move amounts between months but not between years.
 - For account-level answers, say that account attributes come from the latest invoice.
 
+The caveats below are printed under every answer whose SQL touches them, whatever the explanation
+says. Each one is stored with its column or table (spec 01), so it travels with the data:
+
+- `amount_usd`, `recognized_usd`: the FX direction is not confirmed by CloudNova (spec 01, Currency).
+- `mrr_usd`: MRR is list price × seats × (1 − discount); it does not reconcile to billed revenue.
+- the `accounts` table: attributes come from each account's latest invoice; `account_id` is not a
+  reliable key in this export.
+
 ## Questions this data cannot answer
 
 Refuse rather than approximate:

@@ -31,6 +31,9 @@ If the two implementations disagree, one of them misread the spec.
 runaway three-way cross join must be stopped by the timeout. A second connection opened while the
 first is still open must work.
 
+**Caveats.** A query on `amount_usd` carries the FX caveat; a query on `accounts` carries the account
+caveat; `SELECT count(*) FROM invoices` carries none.
+
 **What the reference does and does not prove.** It shares no code with the pipeline, so it catches
 slips in the SQL. It implements the same decisions from the same spec, so it cannot catch a wrong
 decision. Those are argued with evidence in spec 01, not tested.
@@ -52,6 +55,10 @@ Each case asks the real system a question and checks the returned rows against t
 
 Expected values are not typed into the case file. They come from `evals/reference.py` at run time, so
 they cannot drift from the spec.
+
+The model is not deterministic, so one run proves little. `python -m evals --repeat N` asks every case
+N times. A case passes only if all N runs pass, and the runner prints how many did (`4/5`). An
+expected-fail case counts as `XFAIL` when it fails at least once without an outage.
 
 Not asserted automatically: the wording of explanations, and whether the CSAT flag column in case 5 is
 presented well. Those are read by a person.
