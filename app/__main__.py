@@ -13,8 +13,10 @@ from . import ask, pipeline
 def fmt(v) -> str:
     if v is None:
         return ""
-    if isinstance(v, (float, Decimal)):
-        return f"{v:,.2f}"
+    if isinstance(v, Decimal):
+        return f"{v:,}"  # keeps the column's own scale
+    if isinstance(v, float):  # a churn rate of 0.2192 must not print as 0.22
+        return f"{v:,.2f}" if abs(v) >= 1 else f"{v:.4g}"
     return str(v)  # integers stay plain: a year must print as 2024, not 2,024
 
 
@@ -37,6 +39,10 @@ def render(res: dict) -> None:
         if len(res["rows"]) == ask.MAX_ROWS:
             print(f"  (first {ask.MAX_ROWS} rows)")
         print(f"\nHow: {res['explanation']}")
+        if res["caveats"]:
+            print("\nCheck first:")
+            for note in res["caveats"]:
+                print(f"  - {note}")
     print(f"\n[model: {res['seconds']:.1f}s, ${res['cost_usd']:.4f}]")
 
 

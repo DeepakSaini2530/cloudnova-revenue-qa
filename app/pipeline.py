@@ -34,13 +34,22 @@ MAPS = {
 # When copies of an invoice disagree on status, the earliest entry in this list wins.
 STATUS_PRECEDENCE = ["refunded", "void", "paid", "failed", "pending"]
 
-# Sent to the model with the schema, so the meaning travels with the column.
+# Sent to the model with the schema, so the meaning travels with the column. A trailing
+# "Caveat: ..." is also printed under every answer that uses the column or table (specs 02, 03).
+FX_CAVEAT = (f" Caveat: EUR and GBP are converted with FX_MODE={config.FX_MODE}; CloudNova has not confirmed"
+             " the FX direction, which moves revenue by about 10%.")
+MRR_CAVEAT = " Caveat: MRR is list price x seats x (1 - discount); it does not reconcile to billed revenue."
+TABLE_COMMENTS = {
+    "accounts": "One row per account. Caveat: Account-level figures use each account's latest invoice for"
+                " plan, region, CSAT and churn; account_id is not a reliable key in this export.",
+}
 COMMENTS = {
     "invoices": {
         "amount": "Invoice amount in the invoice currency. Do not sum across currencies.",
-        "amount_usd": "Invoice amount in USD. Negative for refunded invoices.",
-        "recognized_usd": "amount_usd if status is paid or refunded, else 0. SUM = revenue net of refunds.",
-        "mrr_usd": "Monthly recurring revenue implied by this invoice's plan, seats and discount.",
+        "amount_usd": "Invoice amount in USD. Negative for refunded invoices." + FX_CAVEAT,
+        "recognized_usd": "amount_usd if status is paid or refunded, else 0. SUM = revenue net of refunds."
+                          + FX_CAVEAT,
+        "mrr_usd": "Monthly recurring revenue implied by this invoice's plan, seats and discount." + MRR_CAVEAT,
         "status": "paid | pending | failed | refunded | void",
         "plan": "starter | pro | enterprise",
         "billing_cycle": "monthly | annual (an annual invoice bills 10 months)",
@@ -52,7 +61,7 @@ COMMENTS = {
         "churned": "Account churn flag as it appeared on this invoice. Prefer accounts.churned.",
     },
     "accounts": {
-        "mrr_usd": "Current MRR in USD from the latest invoice. 0 for churned accounts.",
+        "mrr_usd": "Current MRR in USD from the latest invoice. 0 for churned accounts." + MRR_CAVEAT,
         "is_active": "True when the account has not churned.",
         "churned": "True when the account has churned.",
         "plan": "Current plan: starter | pro | enterprise",
@@ -285,6 +294,8 @@ def _build(raw_csv, db_path) -> dict:
         for table, cols in COMMENTS.items():
             for col, text in cols.items():
                 con.execute(f"COMMENT ON COLUMN {table}.{col} IS '{text.replace(chr(39), chr(39) * 2)}'")
+        for table, text in TABLE_COMMENTS.items():
+            con.execute(f"COMMENT ON TABLE {table} IS '{text.replace(chr(39), chr(39) * 2)}'")
         cur = con.execute(SUMMARY_SQL)
         summary = dict(zip([d[0] for d in cur.description], cur.fetchone()))
         summary["reject_reasons"] = con.execute(

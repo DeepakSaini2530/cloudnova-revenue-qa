@@ -48,4 +48,6 @@ Run `python -m evals --offline` before every commit that touches `app/` or `eval
 - The question layer may read `invoices` and `accounts` only. Contact emails live in `contacts` so the
   model cannot reach them. Do not add personal data to the two readable tables.
 - DuckDB classes `PRAGMA` and table functions as SELECT. Guard on the parse tree, not the statement type.
+- Answer caveats live in column and table comments (`Caveat: ...` in `app/pipeline.py`). `ask.py` only
+  surfaces them for the names the SQL references. Do not write caveat text into `ask.py` or the prompt.
 - Never read or commit `.env`.

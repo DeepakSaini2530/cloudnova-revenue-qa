@@ -54,8 +54,9 @@ def connect() -> duckdb.DuckDBPyConnection:
     return con
 
 
-def check_sql(con: duckdb.DuckDBPyConnection, sql: str) -> None:
+def check_sql(con: duckdb.DuckDBPyConnection, sql: str) -> set[str]:
     """Raise ValueError unless sql is exactly one SELECT that reads only the allowed tables.
+    Returns the names of the tables and columns it references (for caveats).
 
     Works on DuckDB's own parse tree, not on the text: PRAGMA, SHOW and table functions such as
     duckdb_settings() are classed as SELECT statements, so a statement-type check is not enough.
@@ -65,7 +66,7 @@ def check_sql(con: duckdb.DuckDBPyConnection, sql: str) -> None:
     tree = json.loads(con.execute("SELECT json_serialize_sql(?)", [sql]).fetchone()[0])
     if tree.get("error"):
         raise ValueError("only a single SELECT statement is allowed")
-    tables, ctes, blocked = set(), set(), set()
+    tables, ctes, blocked, columns = set(), set(), set(), set()
 
     def walk(node) -> None:
         if isinstance(node, dict):
@@ -73,6 +74,8 @@ def check_sql(con: duckdb.DuckDBPyConnection, sql: str) -> None:
             if kind == "BASE_TABLE":
                 parts = (node.get("catalog_name"), node.get("schema_name"), node.get("table_name"))
                 tables.add(".".join(p for p in parts if p).lower())
+            elif kind == "COLUMN_REF":
+                columns.add(node["column_names"][-1].lower())
             elif kind in ("TABLE_FUNCTION", "SHOW_REF"):
                 blocked.add(kind)
             for entry in (node.get("cte_map") or {}).get("map", []):
@@ -91,20 +94,34 @@ def check_sql(con: duckdb.DuckDBPyConnection, sql: str) -> None:
     if offenders:
         raise ValueError("the query may read only the invoices and accounts tables; not allowed: "
                          + ", ".join(offenders))
+    return (tables & ALLOWED_TABLES) | columns
 
 
-def run_sql(con: duckdb.DuckDBPyConnection, sql: str) -> tuple[list[str], list[tuple]]:
-    """Guard, then execute with a time limit. Raises ValueError or duckdb.Error."""
-    check_sql(con, sql)
+def caveats(con: duckdb.DuckDBPyConnection, names: set[str]) -> list[str]:
+    """The 'Caveat:' part of the comments on the tables and columns a query used (spec 03)."""
+    return [r[0] for r in con.execute("""
+        SELECT DISTINCT split_part(comment, 'Caveat: ', 2) AS caveat FROM (
+            SELECT table_name, column_name AS name, comment FROM duckdb_columns()
+            UNION ALL SELECT table_name, table_name, comment FROM duckdb_tables())
+        WHERE table_name IN ('invoices', 'accounts') AND comment LIKE '%Caveat: %'
+          AND list_contains(?::VARCHAR[], lower(name))
+        ORDER BY caveat""", [sorted(names)]).fetchall()]
+
+
+def run_sql(con: duckdb.DuckDBPyConnection, sql: str) -> tuple[list[str], list[tuple], list[str]]:
+    """Guard, then execute with a time limit. Returns columns, rows and caveats.
+    Raises ValueError or duckdb.Error."""
+    names = check_sql(con, sql)
     timer = threading.Timer(config.QUERY_TIMEOUT, con.interrupt)
     timer.start()
     try:
         cur = con.execute(sql)
-        return [d[0] for d in cur.description], cur.fetchmany(MAX_ROWS)
+        columns, rows = [d[0] for d in cur.description], cur.fetchmany(MAX_ROWS)
     except duckdb.InterruptException:
         raise ValueError(f"the query ran longer than {config.QUERY_TIMEOUT}s and was stopped") from None
     finally:
         timer.cancel()
+    return columns, rows, caveats(con, names)
 
 
 def system_prompt(con: duckdb.DuckDBPyConnection) -> str:
@@ -181,8 +198,8 @@ def answer(question: str) -> dict:
                 sql = reply["sql"]
                 if sql is None:
                     return {"state": "refused", "explanation": reply["explanation"], **meta}
-                columns, rows = run_sql(con, sql)
-                return {"state": "answered", "columns": columns, "rows": rows, **reply, **meta}
+                columns, rows, notes = run_sql(con, sql)
+                return {"state": "answered", "columns": columns, "rows": rows, "caveats": notes, **reply, **meta}
             except (AskError, ValueError, duckdb.Error) as e:  # bad JSON, guard, database error, timeout
                 error = str(e)
                 user = (f"Question: {question}\n\nYour previous reply:\n{text}\n\n"
