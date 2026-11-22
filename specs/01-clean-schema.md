@@ -46,7 +46,7 @@ Five shapes exist. They do not overlap, so each value matches exactly one.
 Why slash = month-first and dash = day-first: in 2,579 slash dates the first field is never above 12,
 and in 532 dash dates the second field is never above 12. The data settles it per shape, with zero
 counter-examples. Dash dates where both fields are ≤ 12 cannot be proven individually, so those rows
-get `invoice_date_ambiguous = true` (88 invoices). Swapping day and month never changes the year, so
+get `invoice_date_ambiguous = true` (88 raw rows, 87 invoices). Swapping day and month never changes the year, so
 **yearly totals are unaffected; monthly and quarterly totals are not.**
 
 ## Duplicates: one row per `invoice_id`
@@ -83,7 +83,8 @@ Rates are fixed: EUR 1.08, GBP 1.27 (config `FX_EUR`, `FX_GBP`).
 **Default `FX_MODE=divide`: `amount_usd = round(amount / rate, 2)`.**
 
 This departs from the literal wording of the briefing ("EUR→USD 1.08"), on evidence: all 1,566 EUR/GBP
-invoices equal `list price × seats × months × (1 − discount) × rate` to within a dollar. The export
+rows (1,524 invoices) equal `list price × seats × months × (1 − discount) × rate` to within a dollar,
+where months is 10 for annual and 1 for monthly. The export
 multiplied USD by the rate to get the local amount, so dividing is what recovers USD and keeps revenue
 consistent with the MRR formula. `FX_MODE=multiply` gives the literal reading. The gap is material
 (about 10% on 2024 revenue), so the README reports both and it is the first question for the customer.
@@ -115,8 +116,9 @@ Plus: `is_active` (= not churned), `mrr_usd` (latest invoice's `mrr_usd`, or 0 w
 `invoice_count`, `latest_invoice_id`, `latest_invoice_date`, and `has_conflicting_attributes` (true
 when the account's invoices disagree on `account_name`, `region` or `signup_date`).
 
-**Known weakness:** `account_id` is not a reliable key in this export. Of the 1,049 accounts with more
-than one invoice, 976 (93%) show different account names across invoices. "Latest invoice wins" is a
+**Known weakness:** `account_id` is not a reliable key in this export. Of the 980 accounts with more
+than one invoice, 976 show different account names across invoices, and all 980 disagree on name,
+region or signup date. "Latest invoice wins" is a
 defensible tie-break, not the truth. Account-level answers are the least trustworthy numbers this
 system produces until the customer supplies an account master.
 
@@ -127,6 +129,6 @@ silently dropped: it is either in `invoices` (possibly merged with its copies) o
 
 ## Not handled (deliberately)
 
-- Future-dated invoices are kept as-is (104 are dated after 2026-11-21, up to 2027).
+- Future-dated invoices are kept as-is (103 are dated after 2026-11-21, the latest 2027-07-23).
 - `signup_date` ambiguity is not flagged; no metric uses it.
 - No email validation beyond the `_at_` repair.
