@@ -22,12 +22,12 @@ listed sends the row to `rejects` with a reason. Nothing is guessed or passed th
 | `churned` | `true`, `yes`, `1`, `y` → true · `false`, `no`, `0`, `n` → false |
 | `currency` | must be `USD`, `EUR` or `GBP` |
 | `region` | must be `NA`, `EMEA`, `APAC` or `LATAM` |
-| `amount` | Remove `$`, `€`, `£`, thousands commas, spaces and a trailing `USD`/`EUR`/`GBP`. The rest must be a number with at most 2 decimals. If the text carried a currency symbol or code, it must agree with `currency`. Stored as `amount` DECIMAL(14,2) in the invoice currency. |
-| `seats` | integer > 0 |
-| `discount_pct` | number, 0 to 100 |
-| `csat_score` | integer 1 to 5, blank → NULL |
-| `support_tickets` | integer ≥ 0 |
-| `contact_email` | lower-cased, `_at_` → `@`, blank → NULL. No further validation. |
+| `amount` | Remove `$`, `€`, `£`, spaces and a trailing `USD`/`EUR`/`GBP`. The rest must be `-?(\d{1,3}(,\d{3})+|\d+)(\.\d{1,2})?`: commas are accepted only as thousands separators, so `1,200.00` is 1200.00 and `1234,50` (decimal comma) is rejected, not read as 123,450. If the text carried a currency symbol or code, it must agree with `currency`. Stored as `amount` DECIMAL(14,2) in the invoice currency. |
+| `seats` | digits only, > 0. `10.6` or `1e2` is rejected, never rounded. |
+| `discount_pct` | number with at most 2 decimals, 0 to 100 |
+| `csat_score` | digits only, 1 to 5, blank → NULL |
+| `support_tickets` | digits only |
+| `contact_email` | lower-cased, `_at_` → `@`, blank → NULL. No further validation. Stored only in `contacts` (see Tables). |
 | `industry` | blank → NULL |
 | `signup_date`, `invoice_date` | see Dates |
 
@@ -64,16 +64,22 @@ Reasoning: pending and failed are in-flight states that a later system can overw
 and refunded are reversals that can only happen after the fact. The invoice gets
 `status_conflict = true`, and `source_rows` records how many raw rows were merged.
 
-If copies ever differ in `amount`, the build fails. No rule has been agreed for that case and it
-does not occur in this file.
+Copies may disagree on `status` and nothing else. Two cases have no agreed rule, do not occur in this
+file, and are quarantined rather than guessed: every copy of the invoice goes to `rejects`.
+
+- Copies disagree on any other cleaned column (amount, seats, currency, dates, plan, account...).
+  Reason: `copies of this invoice disagree on more than status`.
+- One copy fails row-level cleaning. The surviving copy is not booked on its own, because the rejected
+  copy might have been the one that should win (for example a refund with a misspelt plan).
+  Reason: `another copy of this invoice was rejected`.
 
 Sensitivity: the opposite rule (the non-revenue status always wins) changes 2024 paid revenue by about
 $30K, or 0.1%.
 
 ## Sign rule (after dedup)
 
-`refunded` invoices must have a negative amount; every other status must be positive. A violation goes
-to `rejects`. (The two negative "paid" rows in the raw file are both paid/refunded conflicts, which the
+`refunded` invoices must have a negative amount; every other status must be positive. A violation
+sends every raw row of that invoice to `rejects`. (The two negative "paid" rows in the raw file are both paid/refunded conflicts, which the
 dedup rule resolves to `refunded`.)
 
 ## Currency: `amount_usd`
@@ -100,7 +106,7 @@ consistent with the MRR formula. `FX_MODE=multiply` gives the literal reading. T
 
 ### `invoices` (one row per invoice)
 
-`invoice_id` (unique), `account_id`, `account_name`, `contact_email`, `region`, `industry`, `plan`,
+`invoice_id` (unique), `account_id`, `account_name`, `region`, `industry`, `plan`,
 `billing_cycle`, `seats`, `currency`, `amount`, `amount_usd`, `discount_pct`, `status`,
 `payment_method`, `signup_date`, `invoice_date`, `churned`, `csat_score`, `support_tickets`,
 `mrr_usd`, `recognized_usd`, `status_conflict`, `invoice_date_ambiguous`, `source_rows`, `raw_line`.
@@ -108,13 +114,15 @@ consistent with the MRR formula. `FX_MODE=multiply` gives the literal reading. T
 ### `accounts` (one row per `account_id`)
 
 Attributes come from the account's **latest invoice** (highest `invoice_date`, ties broken by highest
-`invoice_id`), whatever its status: `account_name`, `contact_email`, `region`, `industry`, `plan`,
+`invoice_id`), whatever its status: `account_name`, `region`, `industry`, `plan`,
 `billing_cycle`, `seats`, `discount_pct`, `currency`, `signup_date`, `churned`, `csat_score`,
 `support_tickets`.
 
 Plus: `is_active` (= not churned), `mrr_usd` (latest invoice's `mrr_usd`, or 0 when churned),
 `invoice_count`, `latest_invoice_id`, `latest_invoice_date`, and `has_conflicting_attributes` (true
-when the account's invoices disagree on `account_name`, `region` or `signup_date`).
+when the account's invoices disagree on `account_name`, `region` or `signup_date`). In this file that
+flag is true for exactly the 980 accounts with more than one invoice, so here it says nothing that
+`invoice_count > 1` does not.
 
 **Known weakness:** `account_id` is not a reliable key in this export. Of the 980 accounts with more
 than one invoice, 976 show different account names across invoices, and all 980 disagree on name,
@@ -122,10 +130,20 @@ region or signup date. "Latest invoice wins" is a
 defensible tie-break, not the truth. Account-level answers are the least trustworthy numbers this
 system produces until the customer supplies an account master.
 
+### `contacts` (one row per invoice)
+
+`invoice_id`, `account_id`, `contact_email`. Billing-contact emails are personal data and no
+stakeholder question needs them, so they are kept out of `invoices` and `accounts`. The question layer
+cannot read this table (spec 03).
+
 ### `rejects`
 
-`raw_line`, `invoice_id`, `reason`. Expected to be empty for the provided file. A row is never
-silently dropped: it is either in `invoices` (possibly merged with its copies) or in `rejects`.
+`raw_line`, `invoice_id`, `reason`: one row per rejected raw row. Expected to be empty for the provided
+file. A row is never silently dropped: every raw row is either merged into an invoice (counted in its
+`source_rows`) or listed here, so `SUM(source_rows) + rejects = raw rows` always holds.
+
+`raw_line` counts records, with the header as line 1. It equals the physical line number as long as the
+file has no blank lines and no line breaks inside quoted fields, which is true of this file.
 
 ## Not handled (deliberately)
 

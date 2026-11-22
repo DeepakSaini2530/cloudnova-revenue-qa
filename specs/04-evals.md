@@ -15,16 +15,25 @@ Exit code is non-zero if any case fails that was not marked as an expected failu
 - Price reconciliation: for every invoice, `|amount_usd| = mrr_usd × (10 if annual else 1)` within $1.
   This is the check that justifies `FX_MODE=divide`.
 - `accounts` has one row per distinct `account_id` in `invoices`.
-- Reject path: the provided file produces no rejects, so a three-row file with one good row, one
-  unknown plan and one unparseable amount must yield 1 invoice and 2 rejects with those reasons.
+- Reject paths: the provided file produces no rejects, so a synthetic file must. One good row plus one
+  row for each of: unknown plan, non-numeric amount, decimal-comma amount (`1234,50`), fractional seats
+  (`10.6`), two copies that disagree on seats, and a good copy whose other copy is rejected. Expected:
+  exactly 1 invoice, each bad row in `rejects` with the right reason, and every raw row accounted for.
 
 **Reference answers.** `evals/reference.py` recomputes the six stakeholder answers straight from the
 raw CSV using only the Python standard library. It shares no code with the pipeline. The eval compares
 it with SQL over the cleaned tables. Money must agree within $0.05, counts and rankings exactly.
 If the two implementations disagree, one of them misread the spec.
 
-**Guardrails.** `DROP TABLE invoices`, two statements in one string, and a `SELECT` that reads a file
-from disk must all be blocked.
+**Guardrails.** All of these must be blocked: `DROP TABLE invoices`; two statements in one string; a
+`SELECT` that reads a file from disk; `PRAGMA database_list`; a system table function
+(`duckdb_settings()`); the `rejects` and `contacts` tables; a CTE that reuses a real table's name. A
+runaway three-way cross join must be stopped by the timeout. A second connection opened while the
+first is still open must work.
+
+**What the reference does and does not prove.** It shares no code with the pipeline, so it catches
+slips in the SQL. It implements the same decisions from the same spec, so it cannot catch a wrong
+decision. Those are argued with evidence in spec 01, not tested.
 
 ## Layer 2: natural language (needs the Claude Code CLI)
 
@@ -50,7 +59,8 @@ presented well. Those are read by a person.
 ## Expected failure
 
 One case is marked `xfail` and documents a real, observed limitation. The runner prints `XFAIL` when it
-fails as predicted and `XPASS` (called out, not counted as a failure) if it unexpectedly passes.
+fails as predicted and `XPASS` (called out, not counted as a failure) if it unexpectedly passes. If the
+model call itself fails, the case is a plain `FAIL`: an outage is not the predicted failure.
 
 **Case 8, observed 2026-11-21.** "Big customers" is not defined anywhere. The right behaviour is to
 refuse or ask what "big" means. The system is single-turn and cannot ask, and the model answered with

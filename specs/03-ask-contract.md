@@ -18,12 +18,16 @@ to go stale.
    + the question. The model has no tools and no file access. It must reply with one JSON object:
    `{"sql": "<one DuckDB SELECT>" | null, "explanation": "<one or two sentences>"}`.
    `sql` is null when the question cannot be answered from this data; `explanation` then says why.
-3. **Guard.** The SQL must parse as exactly one statement of type SELECT. Anything else is rejected
-   without being executed.
-4. **Execute** on a read-only connection with external access disabled (no file or network reads) and
-   configuration locked. At most 50 rows are shown.
-5. **Retry once.** If the SQL fails the guard or errors in the database, the error is sent back to the
-   model for one corrected attempt. A second failure is reported as a failure.
+3. **Guard.** The SQL is parsed, not pattern-matched. It must be exactly one SELECT that reads only
+   `invoices` and `accounts` (plus its own CTEs). Table functions, `PRAGMA`, `SHOW`/`DESCRIBE`, system
+   tables, `rejects` and `contacts` are rejected without being executed. A CTE may not reuse the name of
+   a real table.
+4. **Execute** on a read-only connection with external access disabled (no file or network reads),
+   1 GB of memory, 2 threads and configuration locked. A query still running after `QUERY_TIMEOUT`
+   seconds (default 10) is interrupted. At most 50 rows are shown.
+5. **Retry once.** If the reply is not the expected JSON, the SQL fails the guard, or the database
+   errors or times out, the error is sent back to the model for one corrected attempt. A second failure
+   is reported as a failure.
 6. **Show** the generated SQL, the result table, the explanation, and the model's latency and cost.
 
 ## Output states
@@ -32,7 +36,7 @@ to go stale.
 |---|---|---|
 | `answered` | SQL ran; SQL + rows + explanation shown | 0 |
 | `refused` | Model returned `sql: null`; the reason is shown | 0 |
-| `failed` | Invalid input, model unavailable or timed out, unparseable reply, or SQL failed twice | 1 |
+| `failed` | Invalid input, model unavailable or timed out, database busy, or two bad replies in a row | 1 |
 
 A failure always says which step failed. It never prints a partial or guessed answer.
 
@@ -41,6 +45,12 @@ A failure always says which step failed. It never prints a partial or guessed an
 The model is the local Claude Code CLI in headless mode (`claude -p`), with all tools disabled and user
 customizations off. The question is passed on stdin, never on the command line. Model name and timeout
 come from config (`CLAUDE_MODEL`, `CLAUDE_TIMEOUT`). No API key is stored by this project.
+
+## Known gaps in this contract
+
+- The 50-row cap limits what is displayed, not what a query can aggregate into one cell.
+- On Windows the model timeout stops waiting for the CLI but may not kill its whole process tree.
+- There is no per-user access control: everyone who can run the tool can ask about every account.
 
 ## Out of scope
 
