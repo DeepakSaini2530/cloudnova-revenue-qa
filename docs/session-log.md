@@ -30,8 +30,8 @@ reported:
 - Candidate answers to all six stakeholder questions, under two dedup rules and both FX directions, to
   show which decisions actually move the numbers (FX: 10%; dedup rule: 0.1%).
 
-It also checked the environment: installed packages, that no Anthropic API key was set, and that my
-global git config would have put an employer email on public commits.
+It also checked the environment: installed packages, that no Anthropic API key was set, and which git
+identity public commits would carry.
 
 ## 2. The four decisions it asked me to make
 
@@ -39,7 +39,7 @@ global git config would have put an employer email on public commits.
 |---|---|---|
 | Track | B: pipeline + NL-to-SQL (its recommendation) · A: RAG | **Track B** |
 | Model provider | Anthropic API (its recommendation) · Gemini | > local claude code |
-| Git identity for a public repo | account 1 + noreply email · account 2 + noreply email · keep the employer email | account 2 (it applied its noreply-email recommendation) |
+| Which GitHub account to publish under | the two accounts logged in on my machine | the second one |
 | FX conversion default | divide by the rate (its recommendation) · multiply (literal briefing) | **Divide by the rate** |
 
 **Override:** I rejected both model options and told it to use the local Claude Code CLI instead. A
@@ -80,6 +80,43 @@ were green, which is why those commits share a timestamp.
    invented definitions. "Big customers" became the expected-fail case; both are in the README.
 8. Added one check for the reject path, because the provided file never triggers it.
 9. README, architecture diagram, this log, CI workflow.
+
+## 5. Publish, test, review round
+
+The assistant stopped before publishing and asked. I approved, it pushed, and CI passed on GitHub.
+It then wrote a talk track for a walkthrough recording.
+
+> **Me:** run them and test
+
+It ran every command in the talk track in PowerShell, as I would on camera: both live questions, the
+offline evals and the full suite. All passed.
+
+> **Me:** Now use sub agents and rate our application using different personas
+
+It briefed four reviewer subagents in parallel. Each got a persona, the repo and the assignment brief,
+was told to review only, and was not told how the thing was built or what the assistant thought its
+weak points were. Each used its own copy of the database so they could run things concurrently.
+
+| Persona | Score | Main finding |
+|---|---|---|
+| Hiring manager, grading the rubric | 7.5 | Would advance. Weakest rubric item: my own judgment is barely visible in this log |
+| Senior data engineer | 7 | All six answers reproduced independently. Four ways a slightly different export would be booked wrongly |
+| CloudNova finance lead | 6.5 | Paid and net revenue never bridged; MRR does not tie to billed revenue; README written for engineers |
+| LLM security engineer | 6.5 | System functions passed the guard as "SELECT"; no query time limit; emails reachable by the model |
+
+The assistant did not take the reports on trust. It reproduced each defect itself before listing it,
+and found one more while doing so (a second database connection failed while the first was open). It
+then gave me three groups: things only I could do, things it could fix, and things to leave as
+documented limits.
+
+> **Me:** Yes, fix them
+
+Specs were changed and committed first, then the pipeline, the guard and the evals. The offline layer
+grew from 26 to 45 checks. Left as documented limits, by choice: the lenient live checker, the model
+timeout not killing the CLI's process tree on Windows, and no per-user access control.
+
+The hiring-manager finding stands: this log records what I asked for and what I decided, and says
+little about why.
 
 ## What I would point a reviewer at
 

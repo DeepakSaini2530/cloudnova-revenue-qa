@@ -17,8 +17,9 @@ and showing it. Built for a finance lead who needs to trust the numbers.
 5. **Simplest thing that works.** Standard library and DuckDB before new code. No new dependencies
    without asking. No abstractions with one implementation. No speculative features: put them in the
    README's next-steps list instead.
-6. **Fail loudly.** A row is never silently dropped (it goes to `rejects` with a reason). A question is
-   never answered with a guess (it is refused or reported as failed).
+6. **Fail loudly.** A row is never silently dropped or rounded into shape (it goes to `rejects` with a
+   reason). A question should be refused or reported as failed rather than answered with a guess.
+   Known gap: business terms missing from spec 02 are still guessed (eval case 8). Do not hide it.
 7. **Be honest in docs.** Limits, failed cases and untested paths are written down as such.
 
 ## Commands
@@ -44,4 +45,7 @@ Run `python -m evals --offline` before every commit that touches `app/` or `eval
 - Annual invoices bill 10 months, not 12.
 - MRR comes from `accounts.mrr_usd`, never from summing invoices.
 - User questions go to the `claude` CLI on stdin only. Never interpolate them into a command line.
+- The question layer may read `invoices` and `accounts` only. Contact emails live in `contacts` so the
+  model cannot reach them. Do not add personal data to the two readable tables.
+- DuckDB classes `PRAGMA` and table functions as SELECT. Guard on the parse tree, not the statement type.
 - Never read or commit `.env`.
