@@ -231,8 +231,8 @@ PASS 55  FAIL 0  XFAIL 1  XPASS 0
 ## How I used AI
 
 Built with Claude Code. The working rules it ran under are in [CLAUDE.md](CLAUDE.md) and
-[.claude/settings.json](.claude/settings.json); a trimmed log of both sessions, including my prompts and
-where I overrode it, is in [docs/session-log.md](docs/session-log.md).
+[.claude/settings.json](.claude/settings.json); a trimmed log of all three sessions, including my
+prompts and where I overrode it, is in [docs/session-log.md](docs/session-log.md).
 
 In short: I started it in plan mode, where it can only read. It profiled the data before writing
 anything, which is what surfaced the reversed FX and the broken account key. It put the decisions that
@@ -260,11 +260,17 @@ exists. That pass also added the per-answer caveats and the live pass rate. It f
 issues: one is fixed, one is in the limitations, and the rest are listed in the session log and left
 alone because they fail safe.
 
+**Final read-through.** A third session recomputed every number in this README from the database and
+checked the brief's deliverables one by one. The answers held. It found one commit I had not pushed
+and a few stale lines in the specs and comments, fixed those, and changed no behaviour.
+
 ## Time
 
 Roughly 15 minutes of planning (profiling and decisions) and 15 minutes of build for the first
 version (commits from 22:26 to 22:41). The review round added about 10 minutes of fixes (commits from
 23:11 to 23:18) on top of the reviewers' own run time. The second-model review was read-only; the
 changes it led to took about 10 minutes (commits from 23:41 to 23:48) plus a 3-minute live eval run.
-That puts the whole thing a little over the one-hour timebox; the extra time went on trust and
-evidence, not features. Everything not done is in the list above.
+The final read-through took about 15 minutes, most of it read-only checking (commits from 00:32 the
+next day), and touched specs, comments and docs only. That puts the whole thing a little over the
+one-hour timebox; the extra time went on trust and evidence, not features. Everything not done is in
+the list above.

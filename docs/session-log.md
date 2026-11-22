@@ -1,7 +1,8 @@
 # Session log (trimmed)
 
-Two Claude Code sessions (desktop app), 2026-11-21 and 22: the build with Claude Fable 5.2 (sections 1
-to 5), then an independent review and polish pass with Claude Opus 5.5 (section 6). My prompts are
+Three Claude Code sessions (desktop app), 2026-11-21 and 22: the build with Claude Fable 5.2 (sections
+1 to 5), an independent review and polish pass with Claude Opus 5.5 (section 6), and a final
+read-through with Fable 5.2 that changed no behaviour (section 7). My prompts are
 quoted verbatim, trimmed where marked `[...]`; the assistant's turns are summarized. Local paths and
 account details are removed. At the end of the second session I added the summary below and trimmed
 commentary and minor detail (such as which GitHub account to publish under). No fact about who made a
@@ -10,7 +11,7 @@ design or build decision was removed.
 ## How I steered it
 
 - **Ground rules before any code.** My global Claude Code config tells it to prefer the simplest
-  solution that works, standard library and native features first. I started both sessions in plan
+  solution that works, standard library and native features first. I started every session in plan
   mode, so it had to read and profile the data and propose a plan before it could write anything. I
   approved that plan, including the working rules in `CLAUDE.md`: the specs are the source of truth,
   an expected value is never edited to make an eval pass, and the customer's data is never touched.
@@ -183,6 +184,47 @@ Declined, with reasons:
 - A Dockerfile or `POST /ask`. The brief says pick one hardening touch.
 - Findings 2, 4, 5 and 6. They fail safe, and fixing them would change spec counts without changing
   any answer.
+
+## 7. Final read-through before sending
+
+A third session, Claude Fable 5.2 again, started in plan mode.
+
+> **Me:** Do a final review of the app before we send it. Do a cleanup of any redundant files and
+> folders. Also make sure the claude files and session are in order. Our goal is to have the best app.
+
+**Assistant:** Read every file in the repo and the original brief, then checked the claims rather
+than trusting them:
+
+- every number in the README, recomputed from the database, including the multiply-FX column;
+- the brief's six deliverables, one by one;
+- the eval counts (12 + 9 + 11 + 13 + 3 = 48 offline checks);
+- that the installed Claude Code CLI still has each flag `app/ask.py` passes, and that both
+  dependencies need Python 3.10 or later, as the README says;
+- that the Mermaid diagram renders on GitHub;
+- that no tracked file holds a personal email, a local path or a secret.
+
+All of it matched. What it found:
+
+1. My last docs commit had never been pushed, so GitHub was one commit behind my machine.
+2. Spec 04 did not list four checks the eval runner was already running, and no spec said the
+   rebuild is one transaction.
+3. Two comments in `app/pipeline.py` and one line in `CLAUDE.md` still said three tables, from before
+   `contacts` was split out.
+4. Nothing redundant to delete: 22 tracked files, each one a deliverable or linked from the README.
+
+Its plan changed no behaviour, because the brief's timebox was spent and the brief says not to
+gold-plate. I approved it. Specs first, then comments, then docs (see `git log`). The offline evals
+passed 48 of 48 before the code commit, and one live run of the eight questions afterwards gave
+`PASS 55  FAIL 0  XFAIL 1` (32 seconds of model time, $0.04).
+
+Found and left alone, because they fail safe or cannot be reached in normal use:
+
+- `python -m app --help` is read as a question (the same family as finding 5 above).
+- `python -m evals --repeat` without a number stops with a Python error.
+- A database lock that appears between the rebuild and a question, in interactive mode, is not caught.
+- An amount too large for the column type fails the whole build instead of rejecting one row.
+- Git stores the CSV with LF line endings. My working copy is the export byte for byte (CRLF). Same
+  rows and same results either way, and CI runs on the LF copy.
 
 ## What I would point a reviewer at
 

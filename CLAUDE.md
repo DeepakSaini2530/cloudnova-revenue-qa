@@ -28,13 +28,14 @@ and showing it. Built for a finance lead who needs to trust the numbers.
 - `python -m app "question"`: answer one question
 - `python -m evals --offline`: invariants + reference answers + guardrails (no model needed)
 - `python -m evals`: everything, including the natural-language cases
+- `python -m evals --repeat 5`: each natural-language case 5 times, with the pass count
 
 Run `python -m evals --offline` before every commit that touches `app/` or `evals/`.
 
 ## Layout
 
 - `app/config.py`: all settings, read from the environment with defaults (`.env.example`)
-- `app/pipeline.py`: raw CSV to `invoices`, `accounts`, `rejects` (SQL, full refresh)
+- `app/pipeline.py`: raw CSV to `invoices`, `accounts`, `contacts`, `rejects` (SQL, full refresh)
 - `app/ask.py`: question to SQL through the local `claude` CLI, guardrails, execution
 - `evals/`: runner, cases, independent reference
 - `docs/`: architecture diagram, trimmed session log
