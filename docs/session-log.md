@@ -39,13 +39,13 @@ global git config would have put an employer email on public commits.
 |---|---|---|
 | Track | B: pipeline + NL-to-SQL (its recommendation) · A: RAG | **Track B** |
 | Model provider | Anthropic API (its recommendation) · Gemini | > local claude code |
-| Git identity for a public repo | account 1 + noreply email · account 2 + noreply email · keep the employer email | account 2, noreply email |
+| Git identity for a public repo | account 1 + noreply email · account 2 + noreply email · keep the employer email | account 2 (it applied its noreply-email recommendation) |
 | FX conversion default | divide by the rate (its recommendation) · multiply (literal briefing) | **Divide by the rate** |
 
-**Override:** I rejected both model options. I did not want an API key in the project at all, so the
-question layer calls the local Claude Code CLI in headless mode. The assistant then verified the CLI's
-real flags with `claude --help` instead of assuming them, and designed the call with tools disabled
-and the question passed on stdin.
+**Override:** I rejected both model options and told it to use the local Claude Code CLI instead. A
+consequence is that the project holds no API key at all. The assistant then verified the CLI's real
+flags with `claude --help` instead of assuming them, and designed the call with tools disabled and the
+question passed on stdin.
 
 ## 3. Plan review
 
@@ -54,8 +54,9 @@ committed first, verification steps, and the actions it would ask permission for
 
 > **Me:** Shall we create a new project folder under "[my personal projects folder]" ?
 
-**Redirect:** it had proposed building inside an existing folder of mine. I moved it to a standalone
-folder so nothing unrelated could end up in a public repo. Plan updated, then approved.
+**Redirect:** it had proposed building inside an existing folder of mine; I asked for a new standalone
+project folder instead. The assistant agreed and noted the side benefit that nothing unrelated can end
+up in a public repo. Plan updated, then approved.
 
 ## 4. Build (about 15 minutes, see commit timestamps)
 
