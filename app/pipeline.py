@@ -259,7 +259,7 @@ SELECT
 
 
 def build(raw_csv=None, db_path=None) -> dict:
-    """Rebuild invoices, accounts and rejects from the raw CSV. Returns the data-quality summary."""
+    """Rebuild invoices, accounts, contacts and rejects from the raw CSV. Returns the data-quality summary."""
     raw_csv, db_path = raw_csv or config.RAW_CSV, db_path or config.DB_PATH
     if not raw_csv.exists():
         raise SystemExit(f"Raw CSV not found: {raw_csv} (set RAW_CSV)")
@@ -272,7 +272,7 @@ def build(raw_csv=None, db_path=None) -> dict:
 
 def _build(raw_csv, db_path) -> dict:
     with duckdb.connect(str(db_path)) as con:
-        con.execute("BEGIN TRANSACTION")  # all three tables are replaced together or not at all
+        con.execute("BEGIN TRANSACTION")  # all four tables are replaced together or not at all
         con.execute("CREATE OR REPLACE TEMP TABLE maps (col VARCHAR, raw VARCHAR, canon VARCHAR)")
         con.executemany("INSERT INTO maps VALUES (?, ?, ?)",
                         [(col, raw, canon) for col, m in MAPS.items() for raw, canon in m.items()])
