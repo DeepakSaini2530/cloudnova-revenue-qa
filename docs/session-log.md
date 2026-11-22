@@ -226,6 +226,13 @@ Found and left alone, because they fail safe or cannot be reached in normal use:
 - Git stores the CSV with LF line endings. My working copy is the export byte for byte (CRLF). Same
   rows and same results either way, and CI runs on the LF copy.
 
+> **Me:** bump the two CI actions
+
+The CI run passed but carried a Node.js 20 deprecation warning for `actions/checkout@v4` and
+`actions/setup-python@v5`. The assistant had reported it and left it alone. When I asked, it read the
+release notes of each major version in between for breaking changes, moved both to v7, and confirmed
+the next run was green with no warning.
+
 ## What I would point a reviewer at
 
 - The spec-first commit order is real: `git log --reverse`.

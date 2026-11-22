@@ -271,6 +271,6 @@ version (commits from 22:26 to 22:41). The review round added about 10 minutes o
 23:11 to 23:18) on top of the reviewers' own run time. The second-model review was read-only; the
 changes it led to took about 10 minutes (commits from 23:41 to 23:48) plus a 3-minute live eval run.
 The final read-through took about 15 minutes, most of it read-only checking (commits from 00:32 the
-next day), and touched specs, comments and docs only. That puts the whole thing a little over the
-one-hour timebox; the extra time went on trust and evidence, not features. Everything not done is in
-the list above.
+next day), and touched specs, comments, docs and the CI action versions only. That puts the whole
+thing a little over the one-hour timebox; the extra time went on trust and evidence, not features.
+Everything not done is in the list above.
