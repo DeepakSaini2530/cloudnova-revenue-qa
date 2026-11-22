@@ -9,7 +9,8 @@
 | `python -m app --build` | Rebuild and print the data-quality summary only. Needs no model. |
 
 The rebuild is a full refresh every time (5k rows, well under a second). There is no incremental state
-to go stale.
+to go stale. It runs in one transaction: a build that fails says so and leaves the previous database
+unchanged.
 
 ## Answering a question
 

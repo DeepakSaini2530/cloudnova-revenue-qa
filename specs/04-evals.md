@@ -15,10 +15,13 @@ Exit code is non-zero if any case fails that was not marked as an expected failu
 - Price reconciliation: for every invoice, `|amount_usd| = mrr_usd × (10 if annual else 1)` within $1.
   This is the check that justifies `FX_MODE=divide`.
 - `accounts` has one row per distinct `account_id` in `invoices`.
+- `contact_email` is a column of `contacts` and of no other table.
 - Reject paths: the provided file produces no rejects, so a synthetic file must. One good row plus one
   row for each of: unknown plan, non-numeric amount, decimal-comma amount (`1234,50`), fractional seats
   (`10.6`), two copies that disagree on seats, and a good copy whose other copy is rejected. Expected:
   exactly 1 invoice, each bad row in `rejects` with the right reason, and every raw row accounted for.
+  A rebuild of that database from a file with the wrong columns must then fail with a `Build failed`
+  message and leave the database as it was (spec 03).
 
 **Reference answers.** `evals/reference.py` recomputes the six stakeholder answers straight from the
 raw CSV using only the Python standard library. It shares no code with the pipeline. The eval compares
@@ -27,9 +30,11 @@ If the two implementations disagree, one of them misread the spec.
 
 **Guardrails.** All of these must be blocked: `DROP TABLE invoices`; two statements in one string; a
 `SELECT` that reads a file from disk; `PRAGMA database_list`; a system table function
-(`duckdb_settings()`); the `rejects` and `contacts` tables; a CTE that reuses a real table's name. A
-runaway three-way cross join must be stopped by the timeout. A second connection opened while the
-first is still open must work.
+(`duckdb_settings()`); the `rejects` and `contacts` tables, `contacts` also when it is reached through
+a subquery; a CTE that reuses a real table's name. The same file read sent straight to the connection,
+without the guard, must be refused by the engine sandbox. An ordinary CTE that joins `invoices` and
+`accounts` must still run. A runaway three-way cross join must be stopped by the timeout. A second
+connection opened while the first is still open must work.
 
 **Caveats.** A query on `amount_usd` carries the FX caveat; a query on `accounts` carries the account
 caveat; `SELECT count(*) FROM invoices` carries none.
