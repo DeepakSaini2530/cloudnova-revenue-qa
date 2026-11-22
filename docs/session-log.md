@@ -1,12 +1,27 @@
 # Session log (trimmed)
 
-Two Claude Code sessions (desktop app), both 2026-11-21: the build with Claude Fable 5.2 (sections 1
+Two Claude Code sessions (desktop app), 2026-11-21 and 22: the build with Claude Fable 5.2 (sections 1
 to 5), then an independent review and polish pass with Claude Opus 5.5 (section 6). My prompts are
 quoted verbatim, trimmed where marked `[...]`; the assistant's turns are summarized. Local paths and
-account details are removed. Nothing else is edited to look better than it was.
+account details are removed. At the end of the second session I added the summary below and trimmed
+commentary and minor detail (such as which GitHub account to publish under). No fact about who made a
+design or build decision was removed.
 
-Standing instruction in my global Claude Code config, active for the whole session: *prefer the
-simplest solution that works; standard library and native features before new code or dependencies.*
+## How I steered it
+
+- **Ground rules before any code.** My global Claude Code config tells it to prefer the simplest
+  solution that works, standard library and native features first. I started both sessions in plan
+  mode, so it had to read and profile the data and propose a plan before it could write anything. I
+  approved that plan, including the working rules in `CLAUDE.md`: the specs are the source of truth,
+  an expected value is never edited to make an eval pass, and the customer's data is never touched.
+- **The calls were mine.** Track B, FX divide, and the model transport, where I overrode its
+  recommendation (the Anthropic API) in favour of the local Claude Code CLI. My reasons are in the
+  README under "My calls and why".
+- **Proof, not claims.** I had it run every demo command as I would on camera, then had it review its
+  own work through four reviewer personas using subagents, and told it to fix what they found.
+- **A second opinion from a different model before sending.** Claude Opus 5.5 reviewed the repo cold
+  against the brief. I approved the changes it proposed and the ones it declined, and it asked before
+  pushing.
 
 ## 1. Kickoff (plan mode, read-only)
 
@@ -31,16 +46,12 @@ reported:
 - Candidate answers to all six stakeholder questions, under two dedup rules and both FX directions, to
   show which decisions actually move the numbers (FX: 10%; dedup rule: 0.1%).
 
-It also checked the environment: installed packages, that no Anthropic API key was set, and which git
-identity public commits would carry.
-
-## 2. The four decisions it asked me to make
+## 2. The decisions it put to me
 
 | Question | Options it offered | My answer |
 |---|---|---|
 | Track | B: pipeline + NL-to-SQL (its recommendation) · A: RAG | **Track B** |
 | Model provider | Anthropic API (its recommendation) · Gemini | > local claude code |
-| Which GitHub account to publish under | the two accounts logged in on my machine | the second one |
 | FX conversion default | divide by the rate (its recommendation) · multiply (literal briefing) | **Divide by the rate** |
 
 **Override:** I rejected both model options and told it to use the local Claude Code CLI instead. A
@@ -115,9 +126,6 @@ documented limits.
 Specs were changed and committed first, then the pipeline, the guard and the evals. The offline layer
 grew from 26 to 45 checks. Left as documented limits, by choice: the lenient live checker, the model
 timeout not killing the CLI's process tree on Windows, and no per-user access control.
-
-The hiring-manager finding stood at this point: this log recorded what I asked for and what I decided,
-and said little about why. Section 6 is where that changed.
 
 ## 6. Independent review by a second model, then a polish pass
 
