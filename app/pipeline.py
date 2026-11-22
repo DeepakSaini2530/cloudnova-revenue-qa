@@ -73,7 +73,9 @@ CREATE OR REPLACE TEMP MACRO parse_date(v) AS (CASE
     WHEN regexp_full_match(trim(v), '\d{2}-\d{2}-\d{4}') THEN try_strptime(trim(v), '%d-%m-%Y')
     WHEN regexp_full_match(trim(v), '[A-Za-z]{3} \d{1,2} \d{4}') THEN try_strptime(trim(v), '%b %d %Y')
 END)::DATE;
-CREATE OR REPLACE TEMP MACRO amount_text(v) AS regexp_replace(trim(v), '[$€£,\s]|(USD|EUR|GBP)$', '', 'g');
+CREATE OR REPLACE TEMP MACRO to_int(v) AS
+    (CASE WHEN regexp_full_match(clean(v), '\d+') THEN try_cast(clean(v) AS INTEGER) END);
+CREATE OR REPLACE TEMP MACRO amount_text(v) AS regexp_replace(trim(v), '[$€£\s]|(USD|EUR|GBP)$', '', 'g');
 CREATE OR REPLACE TEMP MACRO amount_ccy(v) AS (CASE
     WHEN contains(v, '€') OR trim(v) LIKE '%EUR' THEN 'EUR'
     WHEN contains(v, '£') OR trim(v) LIKE '%GBP' THEN 'GBP'
@@ -81,9 +83,9 @@ CREATE OR REPLACE TEMP MACRO amount_ccy(v) AS (CASE
 END);
 """
 
-# Row-level cleaning. `reason` is NULL for a good row, else the list of failed checks.
+# Row-level cleaning. `row_reason` is NULL for a good row, else the list of failed checks.
 PARSE_SQL = r"""
-CREATE OR REPLACE TEMP TABLE parsed AS
+CREATE OR REPLACE TEMP TABLE cleaned AS
 WITH c AS (
     SELECT
         raw_line,
@@ -99,15 +101,17 @@ WITH c AS (
         canon('payment_method', payment_method) AS payment_method,
         clean(payment_method) AS payment_method_raw,
         canon('churned', churned) = 'true' AS churned,
-        try_cast(clean(seats) AS INTEGER) AS seats,
+        to_int(seats) AS seats,
         upper(clean(currency)) AS currency,
-        CASE WHEN regexp_full_match(amount_text(amount), '-?\d+(\.\d{1,2})?')
-             THEN amount_text(amount)::DECIMAL(14,2) END AS amount,
+        -- commas only as thousands separators: '1234,50' is rejected, not read as 123450
+        CASE WHEN regexp_full_match(amount_text(amount), '-?(\d{1,3}(,\d{3})+|\d+)(\.\d{1,2})?')
+             THEN replace(amount_text(amount), ',', '')::DECIMAL(14,2) END AS amount,
         amount_ccy(amount) AS amount_ccy,
-        try_cast(clean(discount_pct) AS DECIMAL(5,2)) AS discount_pct,
-        try_cast(clean(csat_score) AS INTEGER) AS csat_score,
+        CASE WHEN regexp_full_match(clean(discount_pct), '\d+(\.\d{1,2})?')
+             THEN try_cast(clean(discount_pct) AS DECIMAL(5,2)) END AS discount_pct,
+        to_int(csat_score) AS csat_score,
         clean(csat_score) AS csat_raw,
-        try_cast(clean(support_tickets) AS INTEGER) AS support_tickets,
+        to_int(support_tickets) AS support_tickets,
         parse_date(signup_date) AS signup_date,
         parse_date(invoice_date) AS invoice_date,
         coalesce(regexp_full_match(trim(invoice_date), '(0[1-9]|1[0-2])-(0[1-9]|1[0-2])-\d{4}'), false)
@@ -133,8 +137,27 @@ SELECT *, nullif(concat_ws(', ',
     CASE WHEN support_tickets IS NULL OR support_tickets < 0 THEN 'bad support_tickets' END,
     CASE WHEN signup_date IS NULL THEN 'unparseable signup_date' END,
     CASE WHEN invoice_date IS NULL THEN 'unparseable invoice_date' END
-), '') AS reason
+), '') AS row_reason
 FROM c;
+"""
+
+# Copies of an invoice may disagree on status only. Anything else has no agreed rule, so every copy
+# is quarantined: a good row is not booked while one of its copies is rejected or contradicts it.
+QUARANTINE_SQL = """
+CREATE OR REPLACE TEMP TABLE parsed AS
+SELECT * EXCLUDE (row_reason, fingerprint),
+    coalesce(row_reason, CASE
+        WHEN bool_or(row_reason IS NOT NULL) OVER w THEN 'another copy of this invoice was rejected'
+        WHEN min(fingerprint) OVER w <> max(fingerprint) OVER w
+            THEN 'copies of this invoice disagree on more than status'
+    END) AS reason
+FROM (
+    SELECT *, row(account_id, account_name, contact_email, region, industry, plan, billing_cycle,
+                  payment_method, churned, seats, currency, amount, discount_pct, csat_score,
+                  support_tickets, signup_date, invoice_date)::VARCHAR AS fingerprint
+    FROM cleaned
+)
+WINDOW w AS (PARTITION BY invoice_id);
 """
 
 # One row per invoice_id; latest lifecycle status wins; then the sign rule.
@@ -161,12 +184,18 @@ TABLES_SQL = """
 CREATE OR REPLACE TABLE rejects AS
 SELECT raw_line, invoice_id, reason FROM parsed WHERE reason IS NOT NULL
 UNION ALL
-SELECT raw_line, invoice_id, 'amount sign does not match status' FROM deduped WHERE sign_mismatch
+SELECT p.raw_line, p.invoice_id, 'amount sign does not match status'
+FROM parsed p JOIN deduped d USING (invoice_id)
+WHERE p.reason IS NULL AND d.sign_mismatch
 ORDER BY raw_line;
+
+-- Personal data, kept apart: the question layer is only allowed to read invoices and accounts.
+CREATE OR REPLACE TABLE contacts AS
+SELECT invoice_id, account_id, contact_email FROM deduped WHERE NOT sign_mismatch ORDER BY invoice_id;
 
 CREATE OR REPLACE TABLE invoices AS
 SELECT
-    d.invoice_id, d.account_id, d.account_name, d.contact_email, d.region, d.industry,
+    d.invoice_id, d.account_id, d.account_name, d.region, d.industry,
     d.plan, d.billing_cycle, d.seats, d.currency, d.amount,
     round(d.amount {fx_op} fx.rate, 2)::DECIMAL(14,2) AS amount_usd,
     d.discount_pct, d.status, d.payment_method, d.signup_date, d.invoice_date,
@@ -192,7 +221,7 @@ WITH ranked AS (
     FROM invoices GROUP BY account_id
 )
 SELECT
-    r.account_id, r.account_name, r.contact_email, r.region, r.industry, r.plan, r.billing_cycle,
+    r.account_id, r.account_name, r.region, r.industry, r.plan, r.billing_cycle,
     r.seats, r.discount_pct, r.currency, r.signup_date, r.churned, NOT r.churned AS is_active,
     r.csat_score, r.support_tickets,
     CASE WHEN r.churned THEN 0 ELSE r.mrr_usd END::DECIMAL(14,2) AS mrr_usd,
@@ -213,6 +242,9 @@ SELECT
     (SELECT count(*) FROM invoices WHERE status_conflict) AS status_conflicts,
     (SELECT count(*) FROM invoices WHERE invoice_date_ambiguous) AS ambiguous_invoice_dates,
     (SELECT count(*) FROM invoices WHERE currency <> 'USD') AS non_usd_invoices,
+    (SELECT count(*) FROM invoices
+     WHERE abs(abs(amount_usd) - mrr_usd * CASE WHEN billing_cycle = 'annual' THEN 10 ELSE 1 END) <= 1)
+        AS reconciled_to_list_price,
     (SELECT count(*) FROM accounts WHERE has_conflicting_attributes) AS accounts_with_conflicts
 """
 
@@ -223,7 +255,15 @@ def build(raw_csv=None, db_path=None) -> dict:
     if not raw_csv.exists():
         raise SystemExit(f"Raw CSV not found: {raw_csv} (set RAW_CSV)")
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        return _build(raw_csv, db_path)
+    except duckdb.Error as e:  # locked file, missing column, wrong encoding, empty file...
+        raise SystemExit(f"Build failed; the previous database is unchanged. {type(e).__name__}: {e}") from None
+
+
+def _build(raw_csv, db_path) -> dict:
     with duckdb.connect(str(db_path)) as con:
+        con.execute("BEGIN TRANSACTION")  # all three tables are replaced together or not at all
         con.execute("CREATE OR REPLACE TEMP TABLE maps (col VARCHAR, raw VARCHAR, canon VARCHAR)")
         con.executemany("INSERT INTO maps VALUES (?, ?, ?)",
                         [(col, raw, canon) for col, m in MAPS.items() for raw, canon in m.items()])
@@ -239,15 +279,7 @@ def build(raw_csv=None, db_path=None) -> dict:
             [str(raw_csv)],
         )
         con.execute(PARSE_SQL)
-        clash = con.execute(
-            "SELECT invoice_id FROM parsed WHERE reason IS NULL "
-            "GROUP BY invoice_id HAVING count(DISTINCT amount) > 1 LIMIT 5"
-        ).fetchall()
-        if clash:
-            raise SystemExit(
-                "Copies of the same invoice disagree on amount; spec 01 has no rule for that: "
-                + ", ".join(r[0] for r in clash)
-            )
+        con.execute(QUARANTINE_SQL)
         con.execute(DEDUP_SQL.format(precedence=STATUS_PRECEDENCE))
         con.execute(TABLES_SQL.format(fx_op="/" if config.FX_MODE == "divide" else "*"))
         for table, cols in COMMENTS.items():
@@ -256,7 +288,8 @@ def build(raw_csv=None, db_path=None) -> dict:
         cur = con.execute(SUMMARY_SQL)
         summary = dict(zip([d[0] for d in cur.description], cur.fetchone()))
         summary["reject_reasons"] = con.execute(
-            "SELECT reason, count(*) FROM rejects GROUP BY reason ORDER BY 2 DESC").fetchall()
+            "SELECT reason, count(*) FROM rejects GROUP BY reason ORDER BY 2 DESC, 1").fetchall()
+        con.execute("COMMIT")
     summary["fx_mode"] = config.FX_MODE
     return summary
 
@@ -272,3 +305,5 @@ def print_summary(s: dict) -> None:
     print(f"  status conflicts         {s['status_conflicts']:>6,}   (latest lifecycle state wins)")
     print(f"  ambiguous invoice dates  {s['ambiguous_invoice_dates']:>6,}   (read as DD-MM-YYYY)")
     print(f"  non-USD invoices         {s['non_usd_invoices']:>6,}   (FX_MODE={s['fx_mode']})")
+    print(f"  match list price         {s['reconciled_to_list_price']:>6,}   of {s['invoices']:,} "
+          "(a low count means the FX setting is wrong)")
