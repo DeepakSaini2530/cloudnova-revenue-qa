@@ -1,7 +1,8 @@
 """Eval runner. Implements specs/04-evals.md.
 
-    python -m evals             offline layer + natural-language cases
-    python -m evals --offline   offline layer only (no model needed; this is what CI runs)
+    python -m evals              offline layer + natural-language cases
+    python -m evals --offline    offline layer only (no model needed; this is what CI runs)
+    python -m evals --repeat 5   ask every natural-language case 5 times and report the pass count
 """
 import json
 import sys
@@ -190,6 +191,17 @@ def guardrails(con: duckdb.DuckDBPyConnection) -> None:
         config.QUERY_TIMEOUT = saved
 
 
+def caveat_checks(con: duckdb.DuckDBPyConnection) -> None:
+    print("\nCaveats (printed under answers, taken from column and table comments)")
+    for name, sql, want in [
+        ("FX caveat on a USD amount", "SELECT sum(amount_usd) FROM invoices", "FX_MODE"),
+        ("account caveat on the accounts table", "SELECT count(*) FROM accounts", "latest invoice"),
+        ("no caveat on a plain count", "SELECT count(*) FROM invoices", None),
+    ]:
+        notes = ask.run_sql(con, sql)[2]
+        record(name, any(want in n for n in notes) if want else notes == [], "; ".join(n[:45] for n in notes))
+
+
 def same(cell, want, exp: dict) -> bool:
     if isinstance(want, str):
         return isinstance(cell, str) and cell.strip().lower() == want.lower()
@@ -219,19 +231,28 @@ def judge(case: dict, res: dict, ref: dict) -> tuple[bool, str]:
     return True, ""
 
 
-def natural_language(ref: dict) -> None:
-    print("\nNatural-language cases (live model)")
+def natural_language(ref: dict, runs: int) -> None:
+    print(f"\nNatural-language cases (live model, {runs} run(s) each; a case passes only if every run does)")
     seconds = cost = 0.0
     for case in json.loads(CASES.read_text(encoding="utf-8")):
-        res = ask.answer(case["question"])
-        seconds += res.get("seconds", 0)
-        cost += res.get("cost_usd", 0)
-        ok, detail = judge(case, res, ref)
+        passed, misses, outage = 0, [], False
+        for _ in range(runs):
+            res = ask.answer(case["question"])
+            seconds += res.get("seconds", 0)
+            cost += res.get("cost_usd", 0)
+            ok, detail = judge(case, res, ref)
+            passed += ok
+            outage |= res["state"] == "failed"
+            if not ok:
+                misses.append((detail, res.get("sql")))
         # An outage is not the predicted failure: an expected-fail case only counts when the model answered.
-        xfail = case.get("xfail") if res["state"] != "failed" else None
-        record(case["id"], ok, detail, xfail)
-        if not ok and res.get("sql"):
-            print("         sql: " + " ".join(res["sql"].split())[:300])
+        xfail = case.get("xfail") if not outage else None
+        detail = misses[0][0] if misses else ""
+        if runs > 1:
+            detail = f"{passed}/{runs} passed" + (f"; first miss: {detail}" if detail else "")
+        record(case["id"], passed == runs, detail, xfail)
+        if misses and misses[0][1]:
+            print("         sql: " + " ".join(misses[0][1].split())[:300])
     print(f"  model time {seconds:.0f}s, cost ${cost:.2f}")
 
 
@@ -246,8 +267,10 @@ def main() -> int:
         reject_paths()
         reference_answers(con, ref)
         guardrails(con)
-    if "--offline" not in sys.argv[1:]:
-        natural_language(ref)
+        caveat_checks(con)
+    args = sys.argv[1:]
+    if "--offline" not in args:
+        natural_language(ref, int(args[args.index("--repeat") + 1]) if "--repeat" in args else 1)
     print("\n" + "  ".join(f"{k} {v}" for k, v in tally.items()))
     if tally["XPASS"]:
         print("An expected-fail case passed. Re-check it and update specs/04-evals.md.")
