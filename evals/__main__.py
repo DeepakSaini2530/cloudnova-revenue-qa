@@ -24,16 +24,20 @@ def record(name: str, ok: bool, detail: str = "", xfail: str | None = None) -> N
     print(f"  {status:5}  {name}" + (f"  [{detail}]" if detail else ""))
 
 
-def offline(con: duckdb.DuckDBPyConnection, summary: dict, ref: dict) -> None:
+def accounted(s: dict) -> bool:
+    """Every raw row is either merged into an invoice or listed in rejects."""
+    return s["invoices"] + s["duplicate_rows_merged"] + s["rejects"] == s["raw_rows"]
+
+
+def invariants(con: duckdb.DuckDBPyConnection, summary: dict, ref: dict) -> None:
     def one(sql: str):
         return con.execute(sql).fetchone()[0]
 
-    print("\nPipeline invariants")
+    print("\nPipeline invariants (the provided file)")
     record("5,125 raw rows in", summary["raw_rows"] == 5125, str(summary["raw_rows"]))
     record("5,000 invoices out", summary["invoices"] == 5000 == ref["invoices"], str(summary["invoices"]))
     record("0 rejects", summary["rejects"] == 0, str(summary["rejects"]))
-    record("every raw row accounted for",
-           one("SELECT sum(source_rows) FROM invoices") + summary["rejects"] == summary["raw_rows"])
+    record("every raw row accounted for", accounted(summary))
     record("invoice_id unique", one("SELECT count(*) - count(DISTINCT invoice_id) FROM invoices") == 0)
     record("canonical category values only", one("""
         SELECT count(*) FROM invoices
@@ -48,25 +52,63 @@ def offline(con: duckdb.DuckDBPyConnection, summary: dict, ref: dict) -> None:
            str(summary["ambiguous_invoice_dates"]))
     record("sign rule: refunds negative, others positive",
            one("SELECT count(*) FROM invoices WHERE (status = 'refunded') <> (amount < 0) OR amount = 0") == 0)
-    record("every amount reconciles to list price (justifies FX divide)", one("""
-        SELECT count(*) FROM invoices
-        WHERE abs(abs(amount_usd) - mrr_usd * CASE WHEN billing_cycle = 'annual' THEN 10 ELSE 1 END) > 1""") == 0)
+    record("every amount reconciles to list price (justifies FX divide)",
+           summary["reconciled_to_list_price"] == summary["invoices"], str(summary["reconciled_to_list_price"]))
     record("accounts: one row per account_id",
            one("SELECT count(*) FROM accounts") == one("SELECT count(DISTINCT account_id) FROM invoices")
            == ref["accounts"])
+    record("contact emails are only in the contacts table", one("""
+        SELECT count(*) FROM duckdb_columns()
+        WHERE column_name = 'contact_email' AND table_name <> 'contacts'""") == 0)
 
-    # The provided file produces no rejects, so prove the reject path with rows that must fail.
+
+def reject_paths() -> None:
+    """The provided file rejects nothing, so prove each reject path with rows that must fail."""
+    print("\nReject paths (synthetic rows)")
     header, good = config.RAW_CSV.read_text(encoding="utf-8").splitlines()[:2]
+    assert all(s in good for s in ("INV-104380", "STARTER", "52920.00", ",100,EUR,")), "fixture row changed"
+
+    def row(invoice_id: str, old: str = "", new: str = "") -> str:
+        return good.replace("INV-104380", invoice_id).replace(old, new)
+
+    rows = [good,
+            row("INV-PLAN", "STARTER", "Platinum"),
+            row("INV-AMOUNT", "52920.00", "52920.00x"),
+            row("INV-COMMA", "52920.00", '"1234,50"'),
+            row("INV-SEATS", ",100,EUR,", ",10.6,EUR,"),
+            row("INV-CLASH"), row("INV-CLASH", ",100,EUR,", ",5,EUR,"),
+            row("INV-HALF"), row("INV-HALF", "STARTER", "Platinum")]
+    expected = {"unknown plan": 2,
+                "unparseable amount": 2,  # non-numeric, and a decimal comma
+                "bad seats": 1,
+                "copies of this invoice disagree on more than status": 2,
+                "another copy of this invoice was rejected": 1}
     with tempfile.TemporaryDirectory() as tmp:
-        bad = Path(tmp, "bad.csv")
-        bad.write_text("\n".join([header, good,
-                                  good.replace("INV-104380", "INV-BAD-1").replace("STARTER", "Platinum"),
-                                  good.replace("INV-104380", "INV-BAD-2").replace("52920.00", "52920.00x")]),
-                       encoding="utf-8")
-        s = pipeline.build(bad, Path(tmp, "bad.duckdb"))
-    record("bad rows go to rejects with a reason, good row survives",
-           s["invoices"] == 1 and sorted(r for r, _ in s["reject_reasons"]) == ["unknown plan", "unparseable amount"],
-           f"{s['invoices']} invoice, rejects {s['reject_reasons']}")
+        db = Path(tmp, "synthetic.duckdb")
+        Path(tmp, "bad.csv").write_text("\n".join([header, *rows]), encoding="utf-8")
+        s = pipeline.build(Path(tmp, "bad.csv"), db)
+        got = dict(s["reject_reasons"])
+        record("only the good row is booked", s["invoices"] == 1, f"{s['invoices']} invoice")
+        for reason, n in expected.items():
+            record(f"rejected: {reason}", got.get(reason) == n, f"{got.get(reason, 0)} of {n}")
+        record("no other reject reasons", set(got) == set(expected), ", ".join(sorted(set(got) - set(expected))))
+        record("every raw row accounted for", accounted(s))
+
+        Path(tmp, "broken.csv").write_text("not,the,right,columns\n1,2,3,4\n", encoding="utf-8")
+        try:
+            pipeline.build(Path(tmp, "broken.csv"), db)
+            message = "it built"
+        except SystemExit as e:
+            message = str(e)
+        with duckdb.connect(str(db), read_only=True) as check:
+            kept = check.execute("SELECT count(*) FROM invoices").fetchone()[0]
+        record("a failed rebuild says so and leaves the previous database intact",
+               message.startswith("Build failed") and kept == 1, message[:60])
+
+
+def reference_answers(con: duckdb.DuckDBPyConnection, ref: dict) -> None:
+    def one(sql: str):
+        return con.execute(sql).fetchone()[0]
 
     print("\nReference answers (independent stdlib recompute vs SQL on the cleaned tables)")
 
@@ -97,15 +139,55 @@ def offline(con: duckdb.DuckDBPyConnection, summary: dict, ref: dict) -> None:
     exact("Q6 pending/failed count", "q6_stuck_count", f"SELECT count(*) {stuck}")
     money("Q6 pending/failed exposure", "q6_stuck_exposed", f"SELECT sum(amount_usd) {stuck}")
 
+
+def guardrails(con: duckdb.DuckDBPyConnection) -> None:
     print("\nGuardrails")
-    for name, sql in [("DROP TABLE is blocked", "DROP TABLE invoices"),
-                      ("two statements are blocked", "SELECT 1; SELECT 2"),
-                      ("reading a file from disk is blocked", f"SELECT * FROM read_csv('{config.RAW_CSV.as_posix()}')")]:
+    read_file = f"SELECT * FROM read_csv('{config.RAW_CSV.as_posix()}')"
+    for name, sql in [
+        ("DROP TABLE", "DROP TABLE invoices"),
+        ("two statements", "SELECT 1; SELECT 2"),
+        ("reading a file from disk", read_file),
+        ("PRAGMA database_list", "PRAGMA database_list"),
+        ("a system table function", "SELECT * FROM duckdb_settings()"),
+        ("the rejects table", "SELECT count(*) FROM rejects"),
+        ("the contacts table (emails)", "SELECT string_agg(contact_email, ';') FROM contacts"),
+        ("contacts reached through a subquery", "SELECT (SELECT count(*) FROM contacts) FROM invoices LIMIT 1"),
+        ("a CTE reusing a real table name", "WITH contacts AS (SELECT 1 AS x) SELECT * FROM contacts"),
+    ]:
         try:
             ask.run_sql(con, sql)
-            record(name, False, "it ran")
+            record(f"blocked: {name}", False, "it ran")
         except (ValueError, duckdb.Error) as e:
-            record(name, True, str(e).splitlines()[0][:70])
+            record(f"blocked: {name}", True, str(e).splitlines()[0][:60])
+
+    try:  # second layer: even without the guard, the engine refuses file access
+        con.execute(read_file)
+        record("engine sandbox refuses file reads on its own", False, "it ran")
+    except duckdb.Error as e:
+        record("engine sandbox refuses file reads on its own", True, str(e).splitlines()[0][:60])
+
+    try:  # the guard must not block ordinary analysis
+        ask.run_sql(con, """WITH rev AS (SELECT account_id, sum(recognized_usd) AS usd FROM invoices GROUP BY 1)
+                            SELECT a.region, sum(rev.usd) FROM rev JOIN accounts a USING (account_id) GROUP BY 1""")
+        record("allowed: a CTE joining invoices and accounts", True)
+    except (ValueError, duckdb.Error) as e:
+        record("allowed: a CTE joining invoices and accounts", False, str(e)[:60])
+
+    try:
+        with ask.connect() as second:
+            second.execute("SELECT count(*) FROM invoices")
+        record("a second connection works while the first is open", True)
+    except duckdb.Error as e:
+        record("a second connection works while the first is open", False, str(e)[:60])
+
+    saved, config.QUERY_TIMEOUT = config.QUERY_TIMEOUT, 1
+    try:
+        ask.run_sql(con, "SELECT count(*) FROM invoices a, invoices b, invoices c WHERE a.amount + b.amount + c.amount > 0")
+        record("a runaway query is stopped by the timeout", False, "it finished")
+    except ValueError as e:
+        record("a runaway query is stopped by the timeout", "ran longer" in str(e), str(e)[:60])
+    finally:
+        config.QUERY_TIMEOUT = saved
 
 
 def same(cell, want, exp: dict) -> bool:
@@ -118,6 +200,7 @@ def same(cell, want, exp: dict) -> bool:
 
 
 def judge(case: dict, res: dict, ref: dict) -> tuple[bool, str]:
+    """Lenient on purpose and documented as such: passes when the expected values appear in the rows."""
     if case.get("refuse"):
         return res["state"] == "refused", res["state"]
     if res["state"] != "answered":
@@ -144,7 +227,9 @@ def natural_language(ref: dict) -> None:
         seconds += res.get("seconds", 0)
         cost += res.get("cost_usd", 0)
         ok, detail = judge(case, res, ref)
-        record(case["id"], ok, detail, case.get("xfail"))
+        # An outage is not the predicted failure: an expected-fail case only counts when the model answered.
+        xfail = case.get("xfail") if res["state"] != "failed" else None
+        record(case["id"], ok, detail, xfail)
         if not ok and res.get("sql"):
             print("         sql: " + " ".join(res["sql"].split())[:300])
     print(f"  model time {seconds:.0f}s, cost ${cost:.2f}")
@@ -157,7 +242,10 @@ def main() -> int:
     summary = pipeline.build()
     ref = reference.answers(config.RAW_CSV)
     with ask.connect() as con:
-        offline(con, summary, ref)
+        invariants(con, summary, ref)
+        reject_paths()
+        reference_answers(con, ref)
+        guardrails(con)
     if "--offline" not in sys.argv[1:]:
         natural_language(ref)
     print("\n" + "  ".join(f"{k} {v}" for k, v in tally.items()))
