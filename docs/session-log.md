@@ -164,10 +164,7 @@ My first answer was **review only, no changes**. Then:
 
 **Assistant:** Proposed sharpening what the rubric grades rather than adding features, closing
 weaknesses the README already admitted. Before writing anything about my reasoning it asked me why I
-made my three main calls, offering candidate reasons. I picked the ones that were mine and left the
-rest out: "no key to leak", "the data beats the wording", "keep it switchable, then ask" and "totals
-need SQL" were offered and not picked. My picks are the README's "My calls and why", unchanged in
-substance.
+made my three main calls. My answers, in my own words, are the README's "My calls and why".
 
 Changed, spec first (see `git log`):
 

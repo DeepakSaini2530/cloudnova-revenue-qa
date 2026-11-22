@@ -106,16 +106,14 @@ Settings (FX mode and rates, model, timeouts, paths) are environment variables w
 ## My calls and why
 
 The AI profiled the data, laid out the options and the evidence, and recommended. These calls were
-mine:
+mine, in my words:
 
-- **Track B, not RAG.** Business rules such as "only paid invoices count" and "annual invoices bill 10
-  months" belong in columns that can be tested, not in a prompt that may or may not apply them. It is
-  also the track closest to my own data-engineering background.
+- **Track B, not RAG.** I chose Track B because the business rules need to be testable: only paid
+  invoices count, refunds net out, and annual invoices bill 10 months.
 - **The local Claude Code CLI, not an API key.** The AI recommended the Anthropic API. I chose the CLI
-  so a reviewer with Claude Code can run it without setting up an API account or billing, and so a
-  take-home does not need extra API spend.
-- **FX: divide by the rate, against the briefing's literal wording.** Dividing keeps billed revenue
-  consistent with the briefing's own MRR formula. It is one setting, and both results are shown above.
+  because reviewers can run it without needing an API account.
+- **FX: divide by the rate, against the briefing's literal wording.** Dividing keeps revenue
+  consistent with the MRR formula. It is one setting, and both results are shown above.
 
 ## The spec came first
 
